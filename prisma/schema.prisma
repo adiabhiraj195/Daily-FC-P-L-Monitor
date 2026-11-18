@@ -1,0 +1,374 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum UserRole {
+  ADMIN
+  FINANCE
+  FC_MANAGER
+}
+
+enum FCColour {
+  RED
+  YELLOW
+  GREEN
+  BLUE
+}
+
+enum CostLine {
+  MANPOWER
+  PACKAGING
+  POWER_AND_FUEL
+  FC_RENT
+  EQUIPMENT_RENTALS
+  OVERHEADS
+}
+
+enum CostLineStatus {
+  IN_RANGE
+  BELOW_MIN
+  ABOVE_MAX
+  TARGET_NOT_CONFIGURED
+}
+
+enum AnomalyType {
+  COST_BELOW_MIN
+  COST_ABOVE_MAX
+  CM1_DEVIATION
+  CM2_DEVIATION
+  SUSPICIOUS_HIGH_MARGIN
+}
+
+enum Severity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum ReviewStatus {
+  PENDING
+  ACKNOWLEDGED
+  DISMISSED
+  RESOLVED
+  NEEDS_INVESTIGATION
+}
+
+enum UploadMode {
+  CENTRALIZED
+  SINGLE_FC
+}
+
+enum UploadBatchStatus {
+  INITIATED
+  UPLOADED
+  PROCESSING
+  COMPLETED
+  PARTIALLY_FAILED
+  FAILED
+}
+
+enum SubmissionStatus {
+  MISSING
+  RECEIVED
+  VALIDATING
+  QUEUED
+  PROCESSING
+  COMPLETED
+  PARTIALLY_COMPLETED
+  INVALID
+  FAILED
+}
+
+enum JobStatus {
+  PENDING
+  RUNNING
+  RETRY_WAIT
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+enum EmailStatus {
+  PENDING
+  SENDING
+  SENT
+  FAILED
+  UNKNOWN
+}
+
+enum AIReportStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+model User {
+  id           String               @id @default(uuid())
+  name         String
+  email        String               @unique
+  passwordHash String
+  role         UserRole             @default(FC_MANAGER)
+  isActive     Boolean              @default(true)
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+  assignedFCs  UserFulfilmentCentre[]
+  targetRules  TargetRule[]
+  uploadBatches UploadBatch[]
+  reviews      AnomalyReview[]
+  auditLogs    AuditLog[]
+}
+
+model FulfilmentCentre {
+  id          String               @id @default(uuid())
+  code        String               @unique
+  name        String
+  location    String?
+  currency    String               @default("INR")
+  isActive    Boolean              @default(true)
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+  managers    UserFulfilmentCentre[]
+  targetRules TargetRule[]
+  submissions DailySubmission[]
+}
+
+model UserFulfilmentCentre {
+  id         String           @id @default(uuid())
+  userId     String
+  fcId       String
+  assignedAt DateTime         @default(now())
+  user       User             @relation(fields: [userId], references: [id], onDelete: Restrict)
+  fc         FulfilmentCentre @relation(fields: [fcId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, fcId])
+}
+
+model TargetRule {
+  id            String            @id @default(uuid())
+  fcId          String?
+  metricKey     String
+  minPct        Decimal           @db.Decimal(9, 4)
+  maxPct        Decimal           @db.Decimal(9, 4)
+  effectiveFrom DateTime          @db.Date
+  effectiveTo   DateTime?         @db.Date
+  createdById   String
+  createdAt     DateTime          @default(now())
+  fc            FulfilmentCentre? @relation(fields: [fcId], references: [id], onDelete: Restrict)
+  createdBy     User              @relation(fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([metricKey, effectiveFrom, effectiveTo])
+  @@index([fcId, metricKey])
+}
+
+model UploadBatch {
+  id               String            @id @default(uuid())
+  uploadedById     String
+  mode             UploadMode        @default(CENTRALIZED)
+  originalFileName String
+  bucket           String
+  objectKey        String            @unique
+  contentType      String
+  fileSize         Int
+  checksum         String?
+  status           UploadBatchStatus @default(INITIATED)
+  rowCount         Int?
+  validRowCount    Int?
+  invalidRowCount  Int?
+  errorSummary     Json?
+  createdAt        DateTime          @default(now())
+  completedAt      DateTime?
+  uploadedBy       User              @relation(fields: [uploadedById], references: [id], onDelete: Restrict)
+  submissions      DailySubmission[]
+
+  @@index([status, createdAt])
+}
+
+model DailySubmission {
+  id              String           @id @default(uuid())
+  batchId         String?
+  fcId            String
+  businessDate    DateTime         @db.Date
+  version         Int              @default(1)
+  isLatest        Boolean          @default(true)
+  status          SubmissionStatus @default(RECEIVED)
+  sourceRowIndex  Int?
+  rawInput        Json?
+  normalizedInput Json?
+  errorDetails    Json?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  batch           UploadBatch?     @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  fc              FulfilmentCentre @relation(fields: [fcId], references: [id], onDelete: Restrict)
+  pnl             DailyPnL?
+  emailOutbox     EmailOutbox[]
+
+  @@unique([fcId, businessDate, version])
+  @@index([businessDate, isLatest])
+  @@index([fcId, businessDate])
+}
+
+model DailyPnL {
+  id                 String          @id @default(uuid())
+  submissionId       String          @unique
+  revenue            Decimal         @db.Decimal(18, 2)
+  currency           String          @default("INR")
+  manpowerCost       Decimal         @db.Decimal(18, 2)
+  packagingCost      Decimal         @db.Decimal(18, 2)
+  powerFuelCost      Decimal         @db.Decimal(18, 2)
+  fcRent             Decimal         @db.Decimal(18, 2)
+  equipmentRentals   Decimal         @db.Decimal(18, 2)
+  overheads          Decimal         @db.Decimal(18, 2)
+  cm1                Decimal         @db.Decimal(18, 2)
+  cm1Pct             Decimal         @db.Decimal(9, 4)
+  cm2                Decimal         @db.Decimal(18, 2)
+  cm2Pct             Decimal         @db.Decimal(9, 4)
+  colour             FCColour
+  targetSnapshot     Json
+  calculationVersion Int             @default(1)
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+  submission         DailySubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  costLines          CostLineItem[]
+  anomalies          Anomaly[]
+  aiReport           AIReport?
+
+  @@index([colour])
+}
+
+model CostLineItem {
+  id           String         @id @default(uuid())
+  dailyPnlId   String
+  lineItem     CostLine
+  amount       Decimal        @db.Decimal(18, 2)
+  percentage   Decimal        @db.Decimal(9, 4)
+  targetMinPct Decimal?       @db.Decimal(9, 4)
+  targetMaxPct Decimal?       @db.Decimal(9, 4)
+  status       CostLineStatus @default(IN_RANGE)
+  excessAmount Decimal?       @db.Decimal(18, 2)
+  createdAt    DateTime       @default(now())
+  dailyPnl     DailyPnL       @relation(fields: [dailyPnlId], references: [id], onDelete: Cascade)
+
+  @@unique([dailyPnlId, lineItem])
+}
+
+model Anomaly {
+  id           String          @id @default(uuid())
+  dailyPnlId   String
+  type         AnomalyType
+  metricKey    String
+  actualPct    Decimal         @db.Decimal(9, 4)
+  targetMinPct Decimal?        @db.Decimal(9, 4)
+  targetMaxPct Decimal?        @db.Decimal(9, 4)
+  deviationPP  Decimal?        @db.Decimal(9, 4)
+  impactAmount Decimal?        @db.Decimal(18, 2)
+  severity     Severity        @default(MEDIUM)
+  reviewStatus ReviewStatus    @default(PENDING)
+  description  String
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  dailyPnl     DailyPnL        @relation(fields: [dailyPnlId], references: [id], onDelete: Cascade)
+  reviews      AnomalyReview[]
+
+  @@index([dailyPnlId, reviewStatus])
+  @@index([type, severity])
+}
+
+model AIReport {
+  id               String         @id @default(uuid())
+  dailyPnlId       String         @unique
+  status           AIReportStatus @default(PENDING)
+  investigation    Json
+  recommendations  Json
+  model            String
+  promptVersion    String
+  graphThreadId    String
+  inputFingerprint String?
+  generatedAt      DateTime       @default(now())
+  errorDetails     Json?
+  dailyPnl         DailyPnL       @relation(fields: [dailyPnlId], references: [id], onDelete: Cascade)
+}
+
+model BackgroundJob {
+  id             String    @id @default(uuid())
+  jobType        String
+  payload        Json
+  status         JobStatus @default(PENDING)
+  priority       Int       @default(0)
+  idempotencyKey String    @unique
+  attempts       Int       @default(0)
+  maxAttempts    Int       @default(3)
+  availableAt    DateTime  @default(now())
+  lockedAt       DateTime?
+  lockedBy       String?
+  lockToken      String?
+  heartbeatAt    DateTime?
+  startedAt      DateTime?
+  completedAt    DateTime?
+  lastError      Json?
+  result         Json?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([status, availableAt, priority])
+  @@index([lockedAt])
+  @@index([jobType, status])
+}
+
+model WorkerHeartbeat {
+  workerId    String   @id
+  processName String
+  lastSeenAt  DateTime @default(now())
+  metadata    Json?
+}
+
+model EmailOutbox {
+  id                String          @id @default(uuid())
+  submissionId      String
+  recipient         String
+  subject           String
+  htmlBody          String          @db.Text
+  textBody          String          @db.Text
+  status            EmailStatus     @default(PENDING)
+  attempts          Int             @default(0)
+  providerMessageId String?
+  idempotencyKey    String          @unique
+  lastError         Json?
+  sentAt            DateTime?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  submission        DailySubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+}
+
+model AnomalyReview {
+  id        String   @id @default(uuid())
+  anomalyId String
+  actorId   String
+  action    String
+  reason    String?
+  comment   String?
+  createdAt DateTime @default(now())
+  anomaly   Anomaly  @relation(fields: [anomalyId], references: [id], onDelete: Cascade)
+  actor     User     @relation(fields: [actorId], references: [id], onDelete: Restrict)
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  actorId    String?
+  action     String
+  entityType String
+  entityId   String
+  metadata   Json?
+  createdAt  DateTime @default(now())
+  actor      User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}

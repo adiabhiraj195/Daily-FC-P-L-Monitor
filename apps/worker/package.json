@@ -1,0 +1,32 @@
+{
+  "name": "@prozo/worker",
+  "version": "1.0.0",
+  "private": true,
+  "main": "./src/main.ts",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "build": "tsc --build",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/main.js",
+    "lint": "echo 'linting worker'"
+  },
+  "dependencies": {
+    "@prozo/shared": "workspace:*",
+    "@prozo/finance": "workspace:*",
+    "@prozo/ai": "workspace:*",
+    "@prisma/client": "^6.1.0",
+    "@aws-sdk/client-s3": "^3.714.0",
+    "pino": "^9.6.0",
+    "exceljs": "^4.4.0",
+    "csv-parse": "^5.6.0",
+    "resend": "^4.0.1",
+    "nodemailer": "^6.9.16",
+    "dotenv": "^16.4.7",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/nodemailer": "^6.4.17",
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}

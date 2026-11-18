@@ -111,61 +111,73 @@ export function detectMarginAnomalies(
 
   // CM1 Anomaly Check
   if (cm1Pct.lt(62)) {
-    const deviation = new Decimal(65).minus(cm1Pct); // relative to base target min (65%)
-    const impactAmount = revenue.mul(deviation.div(100)).toFixed(2);
+    const deviationFromTargetPP = new Decimal(65).minus(cm1Pct); // relative to base target min (65%)
+    const breachBeyondTolerancePP = new Decimal(62).minus(cm1Pct); // relative to tolerance lower bound (62%)
+    const impactAmount = revenue.mul(deviationFromTargetPP.div(100)).toFixed(2);
     anomalies.push({
       type: 'CM1_DEVIATION',
       metricKey: 'CM1',
       actualPct: cm1Pct.toFixed(4),
       targetMinPct: TARGET_BANDS.CM1.min,
       targetMaxPct: TARGET_BANDS.CM1.max,
-      deviationPP: deviation.toFixed(4),
+      deviationPP: deviationFromTargetPP.toFixed(4),
+      deviationFromTargetPP: deviationFromTargetPP.toFixed(4),
+      breachBeyondTolerancePP: breachBeyondTolerancePP.toFixed(4),
       impactAmount,
       severity: cm1Pct.lt(58) ? 'CRITICAL' : 'HIGH',
-      description: `CM1 margin (${cm1Pct.toFixed(2)}%) breached lower tolerance threshold of 62% (Target: 65%-70%)`
+      description: `CM1 margin (${cm1Pct.toFixed(2)}%) breached lower tolerance threshold of 62% by ${breachBeyondTolerancePP.toFixed(2)}pp (Target: 65%-70%, Deviation: ${deviationFromTargetPP.toFixed(2)}pp)`
     });
   } else if (cm1Pct.gt(73)) {
-    const deviation = cm1Pct.minus(70); // relative to base target max (70%)
+    const deviationFromTargetPP = cm1Pct.minus(70); // relative to base target max (70%)
+    const breachBeyondTolerancePP = cm1Pct.minus(73); // relative to tolerance upper bound (73%)
     anomalies.push({
       type: 'CM1_DEVIATION',
       metricKey: 'CM1',
       actualPct: cm1Pct.toFixed(4),
       targetMinPct: TARGET_BANDS.CM1.min,
       targetMaxPct: TARGET_BANDS.CM1.max,
-      deviationPP: deviation.toFixed(4),
+      deviationPP: deviationFromTargetPP.toFixed(4),
+      deviationFromTargetPP: deviationFromTargetPP.toFixed(4),
+      breachBeyondTolerancePP: breachBeyondTolerancePP.toFixed(4),
       impactAmount: null,
       severity: 'MEDIUM',
-      description: `CM1 margin (${cm1Pct.toFixed(2)}%) breached upper tolerance threshold of 73% (Target: 65%-70%)`
+      description: `CM1 margin (${cm1Pct.toFixed(2)}%) breached upper tolerance threshold of 73% by ${breachBeyondTolerancePP.toFixed(2)}pp (Target: 65%-70%, Deviation: ${deviationFromTargetPP.toFixed(2)}pp)`
     });
   }
 
   // CM2 Anomaly Check
   if (cm2Pct.lt(12)) {
-    const deviation = new Decimal(15).minus(cm2Pct); // relative to base target min (15%)
-    const impactAmount = revenue.mul(deviation.div(100)).toFixed(2);
+    const deviationFromTargetPP = new Decimal(15).minus(cm2Pct); // relative to base target min (15%)
+    const breachBeyondTolerancePP = new Decimal(12).minus(cm2Pct); // relative to tolerance lower bound (12%)
+    const impactAmount = revenue.mul(deviationFromTargetPP.div(100)).toFixed(2);
     anomalies.push({
       type: 'CM2_DEVIATION',
       metricKey: 'CM2',
       actualPct: cm2Pct.toFixed(4),
       targetMinPct: TARGET_BANDS.CM2.min,
       targetMaxPct: TARGET_BANDS.CM2.max,
-      deviationPP: deviation.toFixed(4),
+      deviationPP: deviationFromTargetPP.toFixed(4),
+      deviationFromTargetPP: deviationFromTargetPP.toFixed(4),
+      breachBeyondTolerancePP: breachBeyondTolerancePP.toFixed(4),
       impactAmount,
       severity: cm2Pct.lt(8) ? 'CRITICAL' : 'HIGH',
-      description: `CM2 margin (${cm2Pct.toFixed(2)}%) breached lower tolerance threshold of 12% (Target: 15%-30%)`
+      description: `CM2 margin (${cm2Pct.toFixed(2)}%) breached lower tolerance threshold of 12% by ${breachBeyondTolerancePP.toFixed(2)}pp (Target: 15%-30%, Deviation: ${deviationFromTargetPP.toFixed(2)}pp)`
     });
   } else if (cm2Pct.gt(33)) {
-    const deviation = cm2Pct.minus(30); // relative to base target max (30%)
+    const deviationFromTargetPP = cm2Pct.minus(30); // relative to base target max (30%)
+    const breachBeyondTolerancePP = cm2Pct.minus(33); // relative to tolerance upper bound (33%)
     anomalies.push({
       type: 'SUSPICIOUS_HIGH_MARGIN',
       metricKey: 'CM2',
       actualPct: cm2Pct.toFixed(4),
       targetMinPct: TARGET_BANDS.CM2.min,
       targetMaxPct: TARGET_BANDS.CM2.max,
-      deviationPP: deviation.toFixed(4),
+      deviationPP: deviationFromTargetPP.toFixed(4),
+      deviationFromTargetPP: deviationFromTargetPP.toFixed(4),
+      breachBeyondTolerancePP: breachBeyondTolerancePP.toFixed(4),
       impactAmount: null,
       severity: 'MEDIUM',
-      description: `CM2 margin (${cm2Pct.toFixed(2)}%) is suspiciously high above 33% (Target: 15%-30%). Possible omitted expenses.`
+      description: `CM2 margin (${cm2Pct.toFixed(2)}%) is suspiciously high above 33% by ${breachBeyondTolerancePP.toFixed(2)}pp (Target: 15%-30%, Deviation: ${deviationFromTargetPP.toFixed(2)}pp). Possible omitted expenses.`
     });
   }
 
@@ -228,6 +240,8 @@ export function evaluateCostLine(
         targetMinPct: min.toFixed(4),
         targetMaxPct: max.toFixed(4),
         deviationPP: deviationPP.toFixed(4),
+        deviationFromTargetPP: deviationPP.toFixed(4),
+        breachBeyondTolerancePP: deviationPP.toFixed(4),
         impactAmount: excessCost.toFixed(2),
         severity,
         description: `${lineItem} (${percentage.toFixed(2)}%) exceeded max target of ${max.toFixed(2)}% by ${deviationPP.toFixed(2)}pp (Overrun: ${excessCost.toFixed(2)})`
@@ -254,9 +268,11 @@ export function evaluateCostLine(
         targetMinPct: min.toFixed(4),
         targetMaxPct: max.toFixed(4),
         deviationPP: deviationPP.toFixed(4),
+        deviationFromTargetPP: deviationPP.toFixed(4),
+        breachBeyondTolerancePP: null,
         impactAmount: null,
         severity: 'LOW',
-        description: `${lineItem} (${percentage.toFixed(2)}%) is below minimum target of ${min.toFixed(2)}% by ${deviationPP.toFixed(2)}pp. Investigate potential under-reporting.`
+        description: `${lineItem} (${percentage.toFixed(2)}%) is below minimum target of ${min.toFixed(2)}% by ${deviationPP.toFixed(2)}pp. Unusual underspend or potential data-quality concern.`
       }
     };
   }

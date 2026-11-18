@@ -120,13 +120,27 @@ export class MockModelProvider implements ModelProvider {
   createModel(_options?: { temperature?: number }): BaseChatModel {
     // A mock model that returns valid structured JSON matching schemas
     const mockInvestigation: InvestigationOutput = {
-      summary: 'Automated analysis identified material cost overruns impacting contribution margins.',
+      summary: 'Automated analysis identified material cost overruns impacting contribution margins with partial operational evidence.',
+      diagnosticStatus: 'PARTIAL',
       findings: [
         {
           findingId: 'f-1',
           anomalyId: 'anom-1',
+          title: 'Manpower Cost Anomaly with Overtime Spike',
           lineItem: 'MANPOWER',
           explanation: 'Manpower costs exceeded target threshold due to operational overtime.',
+          classification: 'SUPPORTED_HYPOTHESIS',
+          evidence: [
+            {
+              metric: 'MANPOWER_COST_AMOUNT',
+              currentValue: 25000,
+              baselineValue: 20000,
+              difference: 5000,
+              unit: 'INR',
+              source: 'Daily P&L',
+              businessDate: '2026-11-17'
+            }
+          ],
           evidenceRefs: ['MANPOWER_COST_AMOUNT', 'MANPOWER_COST_PCT'],
           confidence: 'HIGH'
         }
@@ -138,8 +152,9 @@ export class MockModelProvider implements ModelProvider {
           confidence: 'MEDIUM'
         }
       ],
-      recurringIssue: false,
-      unresolvedQuestions: ['Were overtime hours pre-authorized by FC leadership?']
+      dataGaps: ['Shift-level badge swipe data not yet ingested.'],
+      unresolvedQuestions: ['Were overtime hours pre-authorized by FC leadership?'],
+      recurringIssue: false
     };
 
     const mockRecommendation: RecommendationOutput = {
@@ -150,8 +165,15 @@ export class MockModelProvider implements ModelProvider {
           action: 'Audit shift rosters and implement overtime pre-clearance protocol.',
           responsibleTeam: 'FC_OPERATIONS',
           priority: 'HIGH',
+          supportingFindingIds: ['f-1'],
+          relatedFindingIds: ['f-1'],
+          rationale: 'Address primary contributor to margin deterioration.',
           reason: 'Address primary contributor to margin deterioration.',
-          relatedFindingIds: ['f-1']
+          expectedOutcome: 'Reduce unauthorized overtime hours by 20%.',
+          successMetric: 'Overtime ratio < 15% of actual paid hours',
+          reviewAfterDays: 7,
+          expectedSavingINR: null,
+          requiresHumanApproval: true
         }
       ],
       requiresHumanReview: true

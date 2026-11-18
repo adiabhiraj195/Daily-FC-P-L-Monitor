@@ -150,9 +150,10 @@ FC-HYD-01,${testDate},100000,16000,8000,6000,12000,3000,5000
     expect(aiReportResult.investigationSummary).toBeDefined();
     expect(aiReportResult.recommendationsCount).toBeGreaterThan(0);
 
-    const reportInDb = await prisma.aIReport.findUnique({
-      where: { dailyPnlId: blrSub!.id }
+    const reportInDb = await prisma.aIReport.findFirst({
+      where: { dailyPnl: { submissionId: blrSub!.id } }
     });
+    expect(reportInDb).toBeDefined();
     // Pnl id is linked
     const pnl = await prisma.dailyPnL.findUnique({
       where: { submissionId: blrSub!.id },

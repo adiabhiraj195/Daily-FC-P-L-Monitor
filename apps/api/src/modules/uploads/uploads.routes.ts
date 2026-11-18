@@ -72,10 +72,45 @@ uploadsRouter.post(
         contentType: parsed.contentType,
         fileSize: parsed.fileSize,
         mode: parsed.mode,
+        datasetType: parsed.datasetType as any,
         fcId: parsed.fcId
       });
 
       res.status(201).json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+uploadsRouter.get(
+  '/',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const batches = await uploadsService.listBatches(
+        req.user!.id,
+        req.user!.role,
+        req.user!.assignedFcIds
+      );
+      res.json(batches);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+uploadsRouter.get(
+  '/completeness',
+  authenticate,
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const dateStr = (req.query.date as string) || new Date().toISOString().split('T')[0]!;
+      const allowedFcIds =
+        req.user!.role === UserRole.FC_MANAGER ? req.user!.assignedFcIds : undefined;
+
+      const completeness = await uploadsService.getDataCompleteness(dateStr, allowedFcIds);
+      res.json(completeness);
     } catch (err) {
       next(err);
     }

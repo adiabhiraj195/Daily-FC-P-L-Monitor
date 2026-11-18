@@ -3,8 +3,12 @@ import {
   UPLOAD_MODES,
   REVIEW_STATUSES,
   RESPONSIBLE_TEAMS,
-  SEVERITIES
-} from '../constants/index.js';
+  SEVERITIES,
+  DATASET_TYPES,
+  DIAGNOSTIC_STATUSES,
+  FINDING_CLASSIFICATIONS,
+  CONFIDENCE_LEVELS
+} from '../constants/index';
 
 // --- Environment Schema ---
 export const envSchema = z.object({
@@ -95,6 +99,59 @@ export const dailyFCInputSchema = z.object({
 
 export type DailyFCInput = z.infer<typeof dailyFCInputSchema>;
 
+// --- Operational & Workforce Input Schemas ---
+export const dailyOperationsInputSchema = z.object({
+  fcId: z.string().min(1, 'FC ID is required'),
+  businessDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Business date must be YYYY-MM-DD'),
+  inboundShipments: z.number().int({ message: 'Inbound shipments must be an integer' }).nonnegative({ message: 'Inbound shipments must be non-negative' }),
+  outboundOrders: z.number().int({ message: 'Outbound orders must be an integer' }).nonnegative({ message: 'Outbound orders must be non-negative' }),
+  unitsProcessed: z.number().int({ message: 'Units processed must be an integer' }).nonnegative({ message: 'Units processed must be non-negative' }),
+  orderLinesProcessed: z.number().int({ message: 'Order lines processed must be an integer' }).nonnegative({ message: 'Order lines processed must be non-negative' }),
+  returnsProcessed: z.number().int({ message: 'Returns processed must be an integer' }).nonnegative({ message: 'Returns processed must be non-negative' }),
+  operatingHours: z.number().nonnegative({ message: 'Operating hours must be non-negative' }),
+  storageOccupancyPct: z.number().min(0, 'Storage occupancy cannot be negative').max(100, 'Storage occupancy cannot exceed 100%').nullable(),
+  sourceRowIndex: z.number().int().nonnegative().optional()
+});
+
+export const dailyLaborInputSchema = z.object({
+  fcId: z.string().min(1, 'FC ID is required'),
+  businessDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Business date must be YYYY-MM-DD'),
+  plannedHeadcount: z.number().int({ message: 'Planned headcount must be an integer' }).nonnegative({ message: 'Planned headcount must be non-negative' }),
+  actualHeadcount: z.number().int({ message: 'Actual headcount must be an integer' }).nonnegative({ message: 'Actual headcount must be non-negative' }),
+  plannedLabourHours: z.number().nonnegative({ message: 'Planned labour hours must be non-negative' }),
+  actualPaidHours: z.number().nonnegative({ message: 'Actual paid hours must be non-negative' }),
+  productiveHours: z.number().nonnegative({ message: 'Productive hours must be non-negative' }),
+  overtimeHours: z.number().nonnegative({ message: 'Overtime hours must be non-negative' }),
+  contractorHeadcount: z.number().int({ message: 'Contractor headcount must be an integer' }).nonnegative({ message: 'Contractor headcount must be non-negative' }),
+  contractorHours: z.number().nonnegative({ message: 'Contractor hours must be non-negative' }),
+  contractorCost: z.string().refine(val => !isNaN(Number(val)) && Number(val) >= 0, {
+    message: 'Contractor cost must be a non-negative number'
+  }),
+  sourceRowIndex: z.number().int().nonnegative().optional()
+}).superRefine((data, ctx) => {
+  if (data.productiveHours > data.actualPaidHours) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['productiveHours'],
+      message: `Productive hours (${data.productiveHours}) cannot exceed actual paid hours (${data.actualPaidHours})`
+    });
+  }
+  if (data.overtimeHours > data.actualPaidHours) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['overtimeHours'],
+      message: `Overtime hours (${data.overtimeHours}) cannot exceed actual paid hours (${data.actualPaidHours})`
+    });
+  }
+  if (data.contractorHours > data.actualPaidHours) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['contractorHours'],
+      message: `Contractor hours (${data.contractorHours}) cannot exceed actual paid hours (${data.actualPaidHours})`
+    });
+  }
+});
+
 // --- Auth Schemas ---
 export const loginRequestSchema = z.object({
   email: z.string().email(),
@@ -109,52 +166,103 @@ export const initiateUploadRequestSchema = z.object({
   contentType: z.string().min(1),
   fileSize: z.number().positive(),
   mode: z.enum(UPLOAD_MODES).default('CENTRALIZED'),
+  datasetType: z.enum(DATASET_TYPES).default('PNL'),
   fcId: z.string().optional()
 });
 
 export type InitiateUploadRequest = z.infer<typeof initiateUploadRequestSchema>;
 
 // --- AI Output Schemas ---
-export const findingSchema = z.object({
-  findingId: z.string(),
-  anomalyId: z.string().nullable(),
-  lineItem: z.string(),
-  explanation: z.string(),
-  evidenceRefs: z.array(z.string()),
-  confidence: z.enum(['HIGH', 'MEDIUM', 'LOW'])
+export const investigationFindingEvidenceSchema = z.object({
+  metric: z.string(),
+  currentValue: z.number().nullable(),
+  baselineValue: z.number().nullable(),
+  difference: z.number().nullable(),
+  unit: z.string(),
+  source: z.string(),
+  businessDate: z.string()
 });
 
 export const possibleCauseSchema = z.object({
   cause: z.string(),
   supportingEvidenceRefs: z.array(z.string()),
-  confidence: z.enum(['HIGH', 'MEDIUM', 'LOW'])
+  confidence: z.enum(CONFIDENCE_LEVELS)
 });
 
-export const investigationOutputSchema = z.object({
+export const investigationFindingSchema = z.object({
+  findingId: z.string(),
+  anomalyId: z.string().nullable().default(null),
+  title: z.string().default(''),
+  explanation: z.string(),
+  classification: z.enum(FINDING_CLASSIFICATIONS).default('OBSERVED_FACT'),
+  evidenceRefs: z.array(z.string()).default([]),
+  confidence: z.enum(CONFIDENCE_LEVELS).default('HIGH'),
+  evidence: z.array(investigationFindingEvidenceSchema).optional().default([]),
+  lineItem: z.string().optional()
+}).transform(val => {
+  const lineItem = val.lineItem || (val.evidence && val.evidence.length > 0 ? val.evidence[0]!.metric : (val.evidenceRefs[0] || 'METRIC'));
+  const title = val.title || `${lineItem} Analysis`;
+  const evidenceRefs = val.evidenceRefs.length > 0
+    ? val.evidenceRefs
+    : (val.evidence ? val.evidence.map(e => e.metric) : []);
+  return {
+    ...val,
+    title,
+    lineItem,
+    evidenceRefs
+  };
+});
+
+export const findingSchema = investigationFindingSchema;
+
+export const investigationResultSchema = z.object({
   summary: z.string(),
-  findings: z.array(findingSchema),
-  possibleCauses: z.array(possibleCauseSchema),
-  recurringIssue: z.boolean(),
-  unresolvedQuestions: z.array(z.string())
+  diagnosticStatus: z.enum(DIAGNOSTIC_STATUSES).default('COMPLETE'),
+  findings: z.array(investigationFindingSchema).max(5),
+  dataGaps: z.array(z.string()).default([]),
+  unresolvedQuestions: z.array(z.string()).default([]),
+  recurringIssue: z.boolean().default(false),
+  possibleCauses: z.array(possibleCauseSchema).optional().default([])
 });
 
+export const investigationOutputSchema = investigationResultSchema;
 export type InvestigationOutput = z.infer<typeof investigationOutputSchema>;
 
 export const recommendationItemSchema = z.object({
   action: z.string(),
   responsibleTeam: z.enum(RESPONSIBLE_TEAMS),
   priority: z.enum(SEVERITIES),
-  reason: z.string(),
-  relatedFindingIds: z.array(z.string())
+  supportingFindingIds: z.array(z.string()).default([]),
+  rationale: z.string().default(''),
+  expectedOutcome: z.string().default(''),
+  successMetric: z.string().default(''),
+  reviewAfterDays: z.number().int().positive().default(7),
+  expectedSavingINR: z.string().nullable().default(null),
+  requiresHumanApproval: z.boolean().default(true),
+  reason: z.string().optional(),
+  relatedFindingIds: z.array(z.string()).optional()
+}).transform(val => {
+  const rationale = val.rationale || val.reason || 'Operational corrective action.';
+  const reason = val.reason || rationale;
+  const supportingFindingIds = val.supportingFindingIds.length > 0 ? val.supportingFindingIds : (val.relatedFindingIds || []);
+  const relatedFindingIds = val.relatedFindingIds || supportingFindingIds;
+  return {
+    ...val,
+    rationale,
+    reason,
+    supportingFindingIds,
+    relatedFindingIds
+  };
 });
 
-export const recommendationOutputSchema = z.object({
+export const recommendationResultSchema = z.object({
   overallPriority: z.enum(SEVERITIES),
   managerSummary: z.string(),
   recommendations: z.array(recommendationItemSchema),
-  requiresHumanReview: z.boolean()
+  requiresHumanReview: z.boolean().default(true)
 });
 
+export const recommendationOutputSchema = recommendationResultSchema;
 export type RecommendationOutput = z.infer<typeof recommendationOutputSchema>;
 
 // --- Background Job Payload Schemas ---
@@ -223,6 +331,85 @@ export const createManagerRequestSchema = z.object({
 });
 
 export const createFCRequestSchema = newFCSchema;
+
+export const investigationContextSchema = z.object({
+  fcId: z.string(),
+  businessDate: z.string(),
+  dataAvailability: z.object({
+    pnl: z.boolean(),
+    operations: z.boolean(),
+    labor: z.boolean(),
+    historical: z.boolean()
+  }),
+  financial: z.object({
+    revenue: z.string(),
+    cm1: z.string(),
+    cm1Pct: z.string(),
+    cm2: z.string(),
+    cm2Pct: z.string(),
+    colour: z.string(),
+    costs: z.array(z.object({
+      lineItem: z.string(),
+      amount: z.string(),
+      actualPct: z.string(),
+      targetMinPct: z.string().nullable().optional(),
+      targetMaxPct: z.string().nullable().optional(),
+      status: z.string(),
+      excessAmount: z.string().nullable().optional()
+    }))
+  }),
+  anomalies: z.array(z.object({
+    id: z.string(),
+    metricKey: z.string(),
+    type: z.string(),
+    severity: z.string(),
+    deviationFromTargetPP: z.string().nullable().optional(),
+    breachBeyondTolerancePP: z.string().nullable().optional()
+  })),
+  operations: z.object({
+    inboundShipments: z.number(),
+    outboundOrders: z.number(),
+    unitsProcessed: z.number(),
+    orderLinesProcessed: z.number(),
+    returnsProcessed: z.number(),
+    operatingHours: z.number(),
+    storageOccupancyPct: z.number().nullable().optional()
+  }).nullable(),
+  labor: z.object({
+    plannedHeadcount: z.number(),
+    actualHeadcount: z.number(),
+    plannedHours: z.number(),
+    paidHours: z.number(),
+    productiveHours: z.number(),
+    overtimeHours: z.number(),
+    contractorHeadcount: z.number(),
+    contractorHours: z.number(),
+    contractorCost: z.string()
+  }).nullable(),
+  metrics: z.record(z.string(), z.number().nullable().optional()),
+  reconciliation: z.object({
+    status: z.string(),
+    warnings: z.array(z.string()).default([]),
+    contractorCostSharePct: z.number().nullable().optional(),
+    contractorHourSharePct: z.number().nullable().optional(),
+    contractorCostPerHour: z.number().nullable().optional(),
+    nonContractorCostPerHour: z.number().nullable().optional(),
+    signal: z.string().optional(),
+    assumptions: z.array(z.string()).optional()
+  }),
+  history: z.object({
+    available: z.boolean(),
+    sampleSize: z.number(),
+    metrics: z.array(z.object({
+      metric: z.string(),
+      currentValue: z.number(),
+      baselineValue: z.number(),
+      changePct: z.number(),
+      unit: z.string()
+    })).default([]),
+    recurringAnomalyCount: z.number().default(0)
+  })
+});
 
 export type CreateManagerRequest = z.infer<typeof createManagerRequestSchema>;
 export type CreateFCRequest = z.infer<typeof createFCRequestSchema>;

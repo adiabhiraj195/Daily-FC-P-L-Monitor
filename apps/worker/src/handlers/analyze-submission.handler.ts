@@ -7,8 +7,18 @@ export async function handleAnalyzeSubmission(
   payload: { submissionId: string },
   prisma: PrismaClient
 ) {
-  const { submissionId } = payload;
+  if ((payload as any)?.test) {
+    console.log(`[ANALYZE_SUBMISSION] Test probe job received. Skipping execution.`);
+    return { submissionId: 'test', status: 'SKIPPED_TEST' };
+  }
+
+  const { submissionId } = payload || {};
   console.log(`[ANALYZE_SUBMISSION] Starting financial analysis for submissionId=${submissionId}`);
+
+  if (!submissionId) {
+    console.error(`[ANALYZE_SUBMISSION] Missing submissionId in job payload:`, payload);
+    throw new Error(`[ANALYZE_SUBMISSION] Invalid payload: 'submissionId' is required and cannot be undefined`);
+  }
 
   const submission = await prisma.dailySubmission.findUnique({
     where: { id: submissionId },
@@ -292,22 +302,26 @@ ${calculated.anomalies.map(a => `- [${a.severity}] ${a.metricKey} (${a.type}): A
     const needsAI = requiresAIInvestigation(calculated);
     console.log(`[ANALYZE_SUBMISSION] Evaluation requiresAIInvestigation -> ${needsAI} (Colour=${calculated.colour}, Anomalies=${calculated.anomalies.length})`);
 
+    // Only allow AI investigation once all three files (P&L, Operations, Labor) are uploaded
+    const [operationsRecord, laborRecord] = await Promise.all([
+      tx.operationalDailyMetrics.findFirst({
+        where: { fcId: submission.fcId, businessDate: submission.businessDate, isLatest: true }
+      }),
+      tx.workforceDailyMetrics.findFirst({
+        where: { fcId: submission.fcId, businessDate: submission.businessDate, isLatest: true }
+      })
+    ]);
+
+    const hasAllThreeFiles = !!operationsRecord && !!laborRecord;
+
     if (needsAI) {
-      const aiJobKey = `generate-ai:${submission.id}:1`;
-      await tx.backgroundJob.upsert({
-        where: { idempotencyKey: aiJobKey },
-        update: {},
-        create: {
-          jobType: 'GENERATE_AI_REPORT',
-          payload: { submissionId: submission.id },
-          status: JobStatus.PENDING,
-          priority: 5,
-          idempotencyKey: aiJobKey,
-          maxAttempts: 2
-        }
-      });
-      console.log(`[ANALYZE_SUBMISSION] Queued GENERATE_AI_REPORT job (${aiJobKey}) for submission ${submission.id}`);
+      if (hasAllThreeFiles) {
+        console.log(`[ANALYZE_SUBMISSION] All 3 files uploaded for FC=${submission.fc.code}. Ready for AI investigation via UI trigger button.`);
+      } else {
+        console.log(`[ANALYZE_SUBMISSION] AI investigation held: awaiting remaining files (hasOps=${!!operationsRecord}, hasLabor=${!!laborRecord})`);
+      }
     } else {
+      // Normal/Healthy Green FC with 0 anomalies: no AI needed. Schedule standard email digest
       // Normal/Healthy Green FC with 0 anomalies: no AI needed. Schedule standard email digest
       const managerAssignment = await tx.userFulfilmentCentre.findFirst({
         where: { fcId: submission.fcId },

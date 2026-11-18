@@ -3,13 +3,21 @@ import { ModelProvider, getModelProvider } from '../providers/index.js';
 import { runInvestigationAgent } from '../agents/investigation/index.js';
 import { runRecommendationAgent } from '../agents/recommendation/index.js';
 import { getLangSmithTracingConfig } from '../tracers/index.js';
-import { CalculatedPnL, InvestigationOutput, RecommendationOutput } from '@prozo/shared';
+import {
+  CalculatedPnL,
+  InvestigationOutput,
+  RecommendationOutput,
+  DailyOperationsInput,
+  DailyLaborInput,
+  EvidenceCompleteness,
+  DiagnosticStatus,
+  WorkflowTokenUsage,
+  InvestigationContext
+} from '@prozo/shared';
 
 /**
  * Checks whether an FC submission requires AI investigation.
- * Exactly as per Section 6.1:
- * - Run AI only when there is a material anomaly or a Blue suspicious-margin status requiring review.
- * - Healthy, non-suspicious records with no cost-line anomalies do not need LLM calls.
+ * Run AI only when there is a material anomaly or a Blue suspicious-margin status requiring review.
  */
 export function requiresAIInvestigation(pnl: CalculatedPnL): boolean {
   if (pnl.colour === 'BLUE') {
@@ -29,28 +37,73 @@ export function generateDeterministicFallback(state: MarginGraphState): {
   investigation: InvestigationOutput;
   recommendation: RecommendationOutput;
 } {
-  const findings = state.pnl.anomalies.map((a, idx) => ({
-    findingId: `num-${idx + 1}`,
-    anomalyId: null,
-    lineItem: a.metricKey,
-    explanation: a.description,
-    evidenceRefs: [a.metricKey, 'REVENUE'],
-    confidence: 'HIGH' as const
-  }));
+  const findings: InvestigationOutput['findings'] = state.pnl.anomalies.map((a, idx) => {
+    const findingId = `num-${idx + 1}`;
+    return {
+      findingId,
+      anomalyId: null,
+      title: `${a.metricKey} Breach Analysis`,
+      explanation: a.description,
+      classification: 'OBSERVED_FACT' as const,
+      evidence: [
+        {
+          metric: a.metricKey,
+          currentValue: Number(a.actualPct),
+          baselineValue: a.targetMaxPct ? Number(a.targetMaxPct) : null,
+          difference: a.deviationPP ? Number(a.deviationPP) : null,
+          unit: '%',
+          source: 'P&L Target Rules',
+          businessDate: state.businessDate
+        }
+      ],
+      confidence: 'HIGH' as const,
+      lineItem: a.metricKey,
+      evidenceRefs: [a.metricKey, 'REVENUE']
+    };
+  });
 
   if (findings.length === 0 && state.pnl.colour === 'BLUE') {
     findings.push({
       findingId: 'num-blue',
       anomalyId: null,
-      lineItem: 'CM2',
+      title: 'CM2 High Margin Anomaly',
       explanation: `Suspiciously high CM2 margin of ${state.pnl.cm2Pct}% exceeds 33%. Review for unbooked expenses.`,
-      evidenceRefs: ['CM2', 'REVENUE'],
-      confidence: 'HIGH' as const
+      classification: 'DATA_QUALITY_ISSUE' as const,
+      evidence: [
+        {
+          metric: 'CM2',
+          currentValue: Number(state.pnl.cm2Pct),
+          baselineValue: 33,
+          difference: Number(state.pnl.cm2Pct) - 33,
+          unit: '%',
+          source: 'P&L Calculation',
+          businessDate: state.businessDate
+        }
+      ],
+      confidence: 'HIGH' as const,
+      lineItem: 'CM2',
+      evidenceRefs: ['CM2', 'REVENUE']
     });
   }
 
+  const diagnosticStatus: DiagnosticStatus =
+    state.completeness === 'COMPLETE'
+      ? 'COMPLETE'
+      : state.completeness === 'FINANCIAL_ONLY' || state.completeness === 'PENDING_OPERATIONS' || state.completeness === 'PENDING_LABOR'
+        ? 'PARTIAL'
+        : 'INSUFFICIENT_DATA';
+
+  const dataGaps: string[] = [];
+  if (!state.operationsData) {
+    dataGaps.push('Daily_Operations dataset unavailable. Throughput and order line handling not verified.');
+  }
+  if (!state.laborData) {
+    dataGaps.push('Daily_Labor dataset unavailable. Overtime and temporary staffing hours not verified.');
+  }
+
   const investigation: InvestigationOutput = {
-    summary: `Deterministic analysis flagged ${state.pnl.anomalies.length} anomaly(ies) with status ${state.pnl.colour}.`,
+    summary: `Deterministic analysis flagged ${state.pnl.anomalies.length} anomaly(ies) with status ${state.pnl.colour}. Evidence completeness is ${state.completeness || 'FINANCIAL_ONLY'}.`,
+    diagnosticStatus,
     findings,
     possibleCauses: [
       {
@@ -59,8 +112,9 @@ export function generateDeterministicFallback(state: MarginGraphState): {
         confidence: 'HIGH' as const
       }
     ],
-    recurringIssue: false,
-    unresolvedQuestions: ['Detailed operational root cause requires managerial review.']
+    dataGaps,
+    unresolvedQuestions: ['Detailed operational root cause requires managerial review.'],
+    recurringIssue: false
   };
 
   const recommendations: RecommendationOutput = {
@@ -68,10 +122,17 @@ export function generateDeterministicFallback(state: MarginGraphState): {
     managerSummary: 'Review flagged cost breaches and verify unbooked or anomalous line items.',
     recommendations: findings.map(f => ({
       action: `Investigate overrun in ${f.lineItem} and reconcile against shift dispatch reports.`,
-      responsibleTeam: f.lineItem === 'MANPOWER' ? 'FC_OPERATIONS' : 'FINANCE',
-      priority: state.pnl.colour === 'RED' ? 'CRITICAL' : 'HIGH',
+      responsibleTeam: f.lineItem === 'MANPOWER' ? ('FC_OPERATIONS' as const) : ('FINANCE' as const),
+      priority: state.pnl.colour === 'RED' ? ('CRITICAL' as const) : ('HIGH' as const),
+      supportingFindingIds: [f.findingId],
+      relatedFindingIds: [f.findingId],
+      rationale: f.explanation,
       reason: f.explanation,
-      relatedFindingIds: [f.findingId]
+      expectedOutcome: 'Clarify contributing factors and re-establish target margins.',
+      successMetric: `${f.lineItem} within target envelope`,
+      reviewAfterDays: 7,
+      expectedSavingINR: null,
+      requiresHumanApproval: true
     })),
     requiresHumanReview: true
   };
@@ -88,16 +149,27 @@ export async function executeMarginAIWorkflow(
   submissionId: string,
   pnl: CalculatedPnL,
   historicalContext: Record<string, any> = {},
-  customProvider?: ModelProvider
+  customProvider?: ModelProvider,
+  operationalContext?: {
+    operationsData?: DailyOperationsInput | null;
+    laborData?: DailyLaborInput | null;
+    completeness?: EvidenceCompleteness;
+    diagnosticStatus?: DiagnosticStatus;
+    derivedMetrics?: any;
+    version?: number;
+    previousReportId?: string | null;
+  }
 ): Promise<{
   investigation: InvestigationOutput;
   recommendation: RecommendationOutput;
   isFallback: boolean;
   errors: string[];
+  tokenUsage?: WorkflowTokenUsage;
+  investigationContext?: InvestigationContext;
 }> {
   const provider = customProvider || getModelProvider();
   const langsmithConfig = getLangSmithTracingConfig();
-  console.log(`[AI_WORKFLOW] Initializing LangGraph 2-agent workflow: FC=${fcId}, Date=${businessDate}, Submission=${submissionId}, Colour=${pnl.colour}, Anomalies=${pnl.anomalies.length}, Provider=${provider.name}`);
+  console.log(`[AI_WORKFLOW] Initializing LangGraph 2-agent workflow: FC=${fcId}, Date=${businessDate}, Submission=${submissionId}, Colour=${pnl.colour}, Anomalies=${pnl.anomalies.length}, Completeness=${operationalContext?.completeness || 'FINANCIAL_ONLY'}, Provider=${provider.name}`);
   console.log(`[AI_WORKFLOW] LangSmith Tracing: ${langsmithConfig.enabled ? `ACTIVE (Project: "${langsmithConfig.projectName}", Endpoint: "${langsmithConfig.endpoint}")` : 'INACTIVE (Enable with LANGCHAIN_TRACING_V2=true and LANGCHAIN_API_KEY)'}`);
 
   let state: MarginGraphState = {
@@ -106,6 +178,13 @@ export async function executeMarginAIWorkflow(
     submissionId,
     pnl,
     historicalContext,
+    operationsData: operationalContext?.operationsData ?? null,
+    laborData: operationalContext?.laborData ?? null,
+    completeness: operationalContext?.completeness ?? 'FINANCIAL_ONLY',
+    diagnosticStatus: operationalContext?.diagnosticStatus ?? 'PARTIAL',
+    derivedMetrics: operationalContext?.derivedMetrics,
+    version: operationalContext?.version ?? 1,
+    previousReportId: operationalContext?.previousReportId ?? null,
     investigation: null,
     recommendation: null,
     errors: [],
@@ -134,7 +213,9 @@ export async function executeMarginAIWorkflow(
       investigation: fallback.investigation,
       recommendation: fallback.recommendation,
       isFallback: true,
-      errors: state.errors
+      errors: state.errors,
+      tokenUsage: state.tokenUsage,
+      investigationContext: state.investigationContext
     };
   }
   console.log(`[AI_WORKFLOW] Node 1/2 completed: Investigation succeeded with ${state.investigation.findings.length} findings`);
@@ -151,7 +232,9 @@ export async function executeMarginAIWorkflow(
       investigation: state.investigation!,
       recommendation: fallback.recommendation,
       isFallback: true,
-      errors: state.errors
+      errors: state.errors,
+      tokenUsage: state.tokenUsage,
+      investigationContext: state.investigationContext
     };
   }
 
@@ -162,6 +245,8 @@ export async function executeMarginAIWorkflow(
     investigation: state.investigation!,
     recommendation: state.recommendation,
     isFallback: false,
-    errors: state.errors
+    errors: state.errors,
+    tokenUsage: state.tokenUsage,
+    investigationContext: state.investigationContext
   };
 }

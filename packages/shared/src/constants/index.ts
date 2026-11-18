@@ -131,3 +131,41 @@ export type ResponsibleTeam = typeof RESPONSIBLE_TEAMS[number];
 
 export const SEVERITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'] as const;
 export type Severity = typeof SEVERITIES[number];
+
+export const DATASET_TYPES = [
+  'PNL',
+  'DAILY_OPERATIONS',
+  'DAILY_LABOR',
+  'COMBINED_OPERATIONS_LABOR'
+] as const;
+export type DatasetType = typeof DATASET_TYPES[number];
+
+export const DIAGNOSTIC_STATUSES = [
+  'COMPLETE',
+  'PARTIAL',
+  'INSUFFICIENT_DATA',
+  'VALIDATION_FAILED',
+  'FAILED'
+] as const;
+export type DiagnosticStatus = typeof DIAGNOSTIC_STATUSES[number];
+
+export const EVIDENCE_COMPLETENESS_STATES = [
+  'COMPLETE',
+  'FINANCIAL_ONLY',
+  'PENDING_OPERATIONS',
+  'PENDING_LABOR',
+  'PARTIAL',
+  'INSUFFICIENT_DATA'
+] as const;
+export type EvidenceCompleteness = typeof EVIDENCE_COMPLETENESS_STATES[number];
+
+export const FINDING_CLASSIFICATIONS = [
+  'OBSERVED_FACT',
+  'SUPPORTED_HYPOTHESIS',
+  'UNVERIFIED_POSSIBILITY',
+  'DATA_QUALITY_ISSUE'
+] as const;
+export type FindingClassification = typeof FINDING_CLASSIFICATIONS[number];
+
+export const CONFIDENCE_LEVELS = ['HIGH', 'MEDIUM', 'LOW'] as const;
+export type ConfidenceLevel = typeof CONFIDENCE_LEVELS[number];

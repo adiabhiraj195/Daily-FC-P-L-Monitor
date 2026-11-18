@@ -36,6 +36,9 @@ FC-HYD-01,${testDate},100000,16000,8000,6000,12000,3000,5000
 `;
 
   beforeAll(async () => {
+    // Force mock provider so tests don't timeout making external LLM calls
+    process.env.LLM_PROVIDER = 'mock';
+
     // Clean old submissions for test date
     await prisma.dailySubmission.deleteMany({
       where: { businessDate: new Date(testDate) }
@@ -85,13 +88,14 @@ FC-HYD-01,${testDate},100000,16000,8000,6000,12000,3000,5000
     expect(processResult.validRows).toBe(4);
     expect(processResult.invalidRows).toBe(0);
 
-    // Verify 5 submissions created for testDate
+    // Verify submissions created for testDate
     const submissions = await prisma.dailySubmission.findMany({
       where: { businessDate: new Date(testDate), isLatest: true },
       include: { fc: true }
     });
 
-    expect(submissions.length).toBe(5);
+    const activeFcsCount = await prisma.fulfilmentCentre.count({ where: { isActive: true } });
+    expect(submissions.length).toBe(activeFcsCount);
 
     const missingSub = submissions.find(s => s.fc.code === 'FC-KOL-01');
     expect(missingSub).toBeDefined();
@@ -178,14 +182,15 @@ FC-HYD-01,${testDate},100000,16000,8000,6000,12000,3000,5000
   });
 
   it('Step 7: Dashboard summary reflects exact counts and weighted aggregate CM% metrics', async () => {
+    const activeFcsCount = await prisma.fulfilmentCentre.count({ where: { isActive: true } });
     const summaryRes = await request(app)
       .get(`/api/v1/dashboard/summary?date=${testDate}`)
       .set('Cookie', financeCookie);
 
     expect(summaryRes.status).toBe(200);
-    expect(summaryRes.body.activeFcsCount).toBe(5);
+    expect(summaryRes.body.activeFcsCount).toBe(activeFcsCount);
     expect(summaryRes.body.receivedCount).toBe(4);
-    expect(summaryRes.body.missingCount).toBe(1);
+    expect(summaryRes.body.missingCount).toBe(activeFcsCount - 4);
     expect(summaryRes.body.invalidCount).toBe(0);
     expect(Number(summaryRes.body.aggregates.totalRevenue)).toBe(400000);
     expect(Number(summaryRes.body.aggregates.weightedCM1Pct)).toBeGreaterThan(0);
@@ -197,6 +202,18 @@ FC-HYD-01,${testDate},100000,16000,8000,6000,12000,3000,5000
       where: { dailyPnl: { submission: { businessDate: new Date(testDate) } } }
     });
     expect(anomaly).toBeDefined();
+
+    // Verify In-App Notifications were generated for responsible manager and admin
+    const anomalyNotifications = await prisma.notification.findMany({
+      where: { type: 'ANOMALY_DETECTED' }
+    });
+    expect(anomalyNotifications.length).toBeGreaterThan(0);
+
+    // Verify Email Outbox has anomaly alert records
+    const anomalyEmails = await prisma.emailOutbox.findMany({
+      where: { subject: { contains: 'ANOMALY ALERT' } }
+    });
+    expect(anomalyEmails.length).toBeGreaterThan(0);
 
     const reviewRes = await request(app)
       .patch(`/api/v1/anomalies/${anomaly!.id}/review`)

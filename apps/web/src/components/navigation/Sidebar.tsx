@@ -10,7 +10,9 @@ import {
   Building2,
   AlertTriangle,
   Sliders,
-  CalendarCheck2
+  CalendarCheck2,
+  Users,
+  Bell
 } from 'lucide-react';
 import { clsx } from 'clsx';
 
@@ -24,7 +26,9 @@ export function Sidebar() {
     { label: 'Daily Monitor', href: '/submissions', icon: CalendarCheck2 },
     { label: 'Fulfilment Centres', href: '/fcs', icon: Building2 },
     { label: 'Anomalies & AI', href: '/anomalies', icon: AlertTriangle },
-    { label: 'Target Rules', href: '/targets', icon: Sliders, roles: ['ADMIN'] }
+    { label: 'Notifications', href: '/notifications', icon: Bell },
+    { label: 'Target Rules', href: '/targets', icon: Sliders, roles: ['ADMIN'] },
+    { label: 'User Management', href: '/users', icon: Users, roles: ['ADMIN'] }
   ];
 
   const allowedItems = navItems.filter(item => {

@@ -3,10 +3,12 @@
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchApi } from '../../../lib/api-client';
+import { useAuth } from '../../../components/providers';
 import Link from 'next/link';
-import { Building2, MapPin, User, ArrowRight } from 'lucide-react';
+import { Building2, MapPin, User, ArrowRight, UserPlus } from 'lucide-react';
 
 export default function FCListPage() {
+  const { user } = useAuth();
   const { data: fcs, isLoading } = useQuery({
     queryKey: ['fcs-list'],
     queryFn: () => fetchApi<any[]>('/fcs')
@@ -14,11 +16,23 @@ export default function FCListPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-xl font-bold text-slate-900 tracking-tight">Fulfilment Centres</h2>
-        <p className="text-xs text-slate-500 mt-1">
-          Network directory of operational fulfilment centres and assigned facility leadership
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-bold text-slate-900 tracking-tight">Fulfilment Centres</h2>
+          <p className="text-xs text-slate-500 mt-1">
+            Network directory of operational fulfilment centres and assigned facility leadership
+          </p>
+        </div>
+
+        {user?.role === 'ADMIN' && (
+          <Link
+            href="/users"
+            className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold flex items-center shadow-sm"
+          >
+            <UserPlus className="w-3.5 h-3.5 mr-1.5" />
+            Provision New FC & Manager ID
+          </Link>
+        )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">

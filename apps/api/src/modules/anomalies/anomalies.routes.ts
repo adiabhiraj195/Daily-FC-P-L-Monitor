@@ -11,20 +11,80 @@ anomaliesRouter.get(
   authenticate,
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const fcFilter =
-        req.user!.role === UserRole.FC_MANAGER
-          ? { dailyPnl: { submission: { fcId: { in: req.user!.assignedFcIds }, isLatest: true } } }
-          : { dailyPnl: { submission: { isLatest: true } } };
+      const {
+        type,
+        severity,
+        reviewStatus,
+        fcId,
+        startDate,
+        endDate,
+        from,
+        to,
+        metricKey
+      } = req.query;
+
+      const start = (startDate || from) as string | undefined;
+      const end = (endDate || to) as string | undefined;
+
+      const submissionWhere: any = { isLatest: true };
+
+      if (req.user!.role === UserRole.FC_MANAGER) {
+        if (fcId) {
+          const reqFcId = String(fcId);
+          if (req.user!.assignedFcIds.includes(reqFcId)) {
+            submissionWhere.fcId = reqFcId;
+          } else {
+            submissionWhere.fcId = { in: [] };
+          }
+        } else {
+          submissionWhere.fcId = { in: req.user!.assignedFcIds };
+        }
+      } else if (fcId) {
+        submissionWhere.fcId = String(fcId);
+      }
+
+      if (start || end) {
+        submissionWhere.businessDate = {};
+        if (start) {
+          submissionWhere.businessDate.gte = new Date(start);
+        }
+        if (end) {
+          const endDateObj = new Date(end);
+          if (end.length <= 10) {
+            endDateObj.setHours(23, 59, 59, 999);
+          }
+          submissionWhere.businessDate.lte = endDateObj;
+        }
+      }
+
+      const whereClause: any = {
+        dailyPnl: {
+          submission: submissionWhere
+        }
+      };
+
+      if (type) {
+        whereClause.type = String(type);
+      }
+      if (severity) {
+        whereClause.severity = String(severity);
+      }
+      if (reviewStatus) {
+        whereClause.reviewStatus = String(reviewStatus);
+      }
+      if (metricKey) {
+        whereClause.metricKey = String(metricKey);
+      }
 
       const anomalies = await prisma.anomaly.findMany({
-        where: fcFilter,
+        where: whereClause,
         include: {
           dailyPnl: {
             include: {
               submission: {
                 select: {
                   businessDate: true,
-                  fc: { select: { id: true, code: true, name: true } }
+                  fc: { select: { id: true, code: true, name: true, location: true } }
                 }
               },
               aiReport: true
@@ -36,7 +96,7 @@ anomaliesRouter.get(
           }
         },
         orderBy: { createdAt: 'desc' },
-        take: 100
+        take: 300
       });
 
       res.json(anomalies);

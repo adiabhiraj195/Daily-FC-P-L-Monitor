@@ -47,14 +47,54 @@ export async function handleProcessUpload(
   const parseResult = await parseSpreadsheetBuffer(fileBuffer, isCsv);
   console.log(`[PROCESS_UPLOAD] Parsed batch ${batchId}: totalRows=${parseResult.totalRows}, validRows=${parseResult.validRows}, invalidRows=${parseResult.invalidRows}, errors=${parseResult.errors.length}`);
 
-  // Update batch progress
+  // Fetch uploader details to enforce FC Manager data isolation
+  const uploader = await prisma.user.findUnique({
+    where: { id: batch.uploadedById },
+    include: {
+      assignedFCs: {
+        include: { fc: true }
+      }
+    }
+  });
+
+  const isFcManager = uploader?.role === 'FC_MANAGER';
+  const allowedFcIds = new Set(uploader?.assignedFCs.map(a => a.fcId) || []);
+  const allowedFcCodes = new Set(uploader?.assignedFCs.map(a => a.fc.code.toUpperCase()) || []);
+
+  // Filter out any rows for FCs that the manager is not authorized to submit
+  const authorizedRecords = [];
+  const unauthorizedErrors = [];
+
+  for (const record of parseResult.records) {
+    if (isFcManager) {
+      const recordCode = record.fcId.toUpperCase().trim();
+      const isAllowed = allowedFcCodes.has(recordCode) || allowedFcIds.has(record.fcId);
+      if (!isAllowed) {
+        unauthorizedErrors.push({
+          rowIndex: record.sourceRowIndex,
+          fcId: record.fcId,
+          field: 'fcId',
+          message: `FC Manager ${uploader?.name} is not authorized to upload data for FC '${record.fcId}'. Only authorized for: ${[...allowedFcCodes].join(', ')}`,
+          rawValue: record.fcId
+        });
+        continue;
+      }
+    }
+    authorizedRecords.push(record);
+  }
+
+  const allErrors = [...parseResult.errors, ...unauthorizedErrors];
+  const totalValidRows = authorizedRecords.length;
+  const totalInvalidRows = parseResult.invalidRows + unauthorizedErrors.length;
+
+  // Update batch progress with error summaries
   await prisma.uploadBatch.update({
     where: { id: batchId },
     data: {
       rowCount: parseResult.totalRows,
-      validRowCount: parseResult.validRows,
-      invalidRowCount: parseResult.invalidRows,
-      errorSummary: parseResult.errors.length > 0 ? (parseResult.errors as any) : null
+      validRowCount: totalValidRows,
+      invalidRowCount: totalInvalidRows,
+      errorSummary: allErrors.length > 0 ? (allErrors as any) : null
     }
   });
 
@@ -66,7 +106,7 @@ export async function handleProcessUpload(
 
   const datesInBatch = new Set<string>();
 
-  for (const record of parseResult.records) {
+  for (const record of authorizedRecords) {
     datesInBatch.add(record.businessDate);
 
     // Resolve FC internal ID
@@ -185,9 +225,9 @@ export async function handleProcessUpload(
 
   // Mark UploadBatch completed or partially failed
   const finalStatus =
-    parseResult.invalidRows > 0 && parseResult.validRows > 0
+    totalInvalidRows > 0 && totalValidRows > 0
       ? UploadBatchStatus.PARTIALLY_FAILED
-      : parseResult.invalidRows > 0 && parseResult.validRows === 0
+      : totalInvalidRows > 0 && totalValidRows === 0
         ? UploadBatchStatus.FAILED
         : UploadBatchStatus.COMPLETED;
 
@@ -199,12 +239,12 @@ export async function handleProcessUpload(
     }
   });
 
-  console.log(`[PROCESS_UPLOAD] Finished batchId=${batchId} with final status=${finalStatus} (valid=${parseResult.validRows}, invalid=${parseResult.invalidRows})`);
+  console.log(`[PROCESS_UPLOAD] Finished batchId=${batchId} with final status=${finalStatus} (valid=${totalValidRows}, invalid=${totalInvalidRows})`);
 
   return {
     batchId,
     status: finalStatus,
-    validRows: parseResult.validRows,
-    invalidRows: parseResult.invalidRows
+    validRows: totalValidRows,
+    invalidRows: totalInvalidRows
   };
 }

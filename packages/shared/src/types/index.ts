@@ -86,3 +86,19 @@ export interface ParseResult {
   validRows: number;
   invalidRows: number;
 }
+
+export interface NotificationItem {
+  id: string;
+  userId: string;
+  title: string;
+  message: string;
+  type: string;
+  severity: Severity;
+  entityType?: string | null;
+  entityId?: string | null;
+  metadata?: any;
+  isRead: boolean;
+  readAt?: string | null;
+  createdAt: string;
+}
+

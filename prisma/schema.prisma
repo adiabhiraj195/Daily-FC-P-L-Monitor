@@ -122,6 +122,7 @@ model User {
   uploadBatches UploadBatch[]
   reviews      AnomalyReview[]
   auditLogs    AuditLog[]
+  notifications Notification[]
 }
 
 model FulfilmentCentre {
@@ -370,5 +371,24 @@ model AuditLog {
   actor      User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
 
   @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+model Notification {
+  id         String    @id @default(uuid())
+  userId     String
+  title      String
+  message    String    @db.Text
+  type       String    @default("ANOMALY_DETECTED")
+  severity   Severity  @default(MEDIUM)
+  entityType String?
+  entityId   String?
+  metadata   Json?
+  isRead     Boolean   @default(false)
+  readAt     DateTime?
+  createdAt  DateTime  @default(now())
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead, createdAt])
   @@index([createdAt])
 }

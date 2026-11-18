@@ -1,4 +1,4 @@
-import { PrismaClient, JobStatus, EmailStatus, AIReportStatus } from '@prisma/client';
+import { PrismaClient, JobStatus, EmailStatus, AIReportStatus, UserRole } from '@prisma/client';
 import { executeMarginAIWorkflow } from '@prozo/ai';
 import { CalculatedPnL } from '@prozo/shared';
 
@@ -131,14 +131,46 @@ export async function handleGenerateAIReport(
 
     console.log(`[GENERATE_AI_REPORT] Persisted AIReport to DB for dailyPnlId=${pnl.id}`);
 
-    // Schedule Email Digest with AI findings
-    const managerAssignment = await tx.userFulfilmentCentre.findFirst({
-      where: { fcId: submission.fcId },
+    // Fetch responsible managers assigned to this FC & active admins
+    const managerAssignments = await tx.userFulfilmentCentre.findMany({
+      where: { fcId: submission.fcId, user: { isActive: true } },
       include: { user: true }
     });
+    const responsibleManagers = managerAssignments.map(m => m.user);
 
-    const recipient = managerAssignment?.user.email || 'finance@prozo.com';
-    const outboxKey = `outbox:${submission.id}:ai-v1`;
+    const activeAdmins = await tx.user.findMany({
+      where: { role: UserRole.ADMIN, isActive: true }
+    });
+
+    const recipientsMap = new Map<string, typeof activeAdmins[0]>();
+    for (const u of [...responsibleManagers, ...activeAdmins]) {
+      recipientsMap.set(u.id, u);
+    }
+    const recipients = Array.from(recipientsMap.values());
+
+    // Create In-App Notifications for AI Report completion
+    for (const user of recipients) {
+      await tx.notification.create({
+        data: {
+          userId: user.id,
+          title: `🤖 AI Investigation Ready: ${submission.fc.name} (${submission.fc.code})`,
+          message: `AI analysis completed for ${dateStr}. Status: ${pnl.colour}. Findings: ${aiResult.investigation.findings.length}, Action Items: ${aiResult.recommendation.recommendations.length}.`,
+          type: 'AI_INVESTIGATION_COMPLETED',
+          severity: pnl.colour === 'RED' ? 'CRITICAL' : pnl.colour === 'YELLOW' ? 'HIGH' : 'MEDIUM',
+          entityType: 'SUBMISSION',
+          entityId: submission.id,
+          metadata: {
+            fcId: submission.fcId,
+            fcCode: submission.fc.code,
+            fcName: submission.fc.name,
+            businessDate: dateStr,
+            colour: pnl.colour,
+            investigationSummary: aiResult.investigation.summary,
+            recommendations: aiResult.recommendation.recommendations
+          }
+        }
+      });
+    }
 
     const htmlBody = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
@@ -181,35 +213,38 @@ Recommendations:
 ${aiResult.recommendation.recommendations.map(r => `- [${r.responsibleTeam}] ${r.action} (Priority: ${r.priority})`).join('\n')}
 `;
 
-    const outbox = await tx.emailOutbox.upsert({
-      where: { idempotencyKey: outboxKey },
-      update: {},
-      create: {
-        submissionId: submission.id,
-        recipient,
-        subject: `[Prozo FC Monitor] Daily Digest - ${submission.fc.name} (${dateStr}) - ${pnl.colour}`,
-        htmlBody,
-        textBody,
-        status: EmailStatus.PENDING,
-        idempotencyKey: outboxKey
-      }
-    });
+    // Queue AI digest email for each manager and admin
+    for (const user of recipients) {
+      const outboxKey = `outbox-ai:${submission.id}:${user.id}:v1`;
+      const outbox = await tx.emailOutbox.upsert({
+        where: { idempotencyKey: outboxKey },
+        update: {},
+        create: {
+          submissionId: submission.id,
+          recipient: user.email,
+          subject: `[Prozo FC Monitor] Daily Digest - ${submission.fc.name} (${dateStr}) - ${pnl.colour}`,
+          htmlBody,
+          textBody,
+          status: EmailStatus.PENDING,
+          idempotencyKey: outboxKey
+        }
+      });
 
-    const emailJobKey = `send-digest:${outbox.id}`;
-    await tx.backgroundJob.upsert({
-      where: { idempotencyKey: emailJobKey },
-      update: {},
-      create: {
-        jobType: 'SEND_FC_DIGEST',
-        payload: { emailOutboxId: outbox.id },
-        status: JobStatus.PENDING,
-        priority: 3,
-        idempotencyKey: emailJobKey,
-        maxAttempts: 3
-      }
-    });
-
-    console.log(`[GENERATE_AI_REPORT] Created EmailOutbox record (${outbox.id}) and queued SEND_FC_DIGEST job (${emailJobKey}) to recipient=${recipient}`);
+      const emailJobKey = `send-digest:${outbox.id}`;
+      await tx.backgroundJob.upsert({
+        where: { idempotencyKey: emailJobKey },
+        update: {},
+        create: {
+          jobType: 'SEND_FC_DIGEST',
+          payload: { emailOutboxId: outbox.id },
+          status: JobStatus.PENDING,
+          priority: 3,
+          idempotencyKey: emailJobKey,
+          maxAttempts: 3
+        }
+      });
+      console.log(`[GENERATE_AI_REPORT] Created EmailOutbox record (${outbox.id}) and queued SEND_FC_DIGEST job (${emailJobKey}) to recipient=${user.email}`);
+    }
   });
 
   return {

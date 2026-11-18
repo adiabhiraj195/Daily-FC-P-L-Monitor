@@ -22,6 +22,7 @@
     "prisma:migrate": "prisma migrate dev --schema=prisma/schema.prisma",
     "prisma:push": "prisma db push --schema=prisma/schema.prisma",
     "prisma:seed": "tsx prisma/seed.ts",
+    "db:flush": "tsx scripts/flush-db.ts",
     "docker:up": "docker compose up -d",
     "docker:down": "docker compose down"
   },

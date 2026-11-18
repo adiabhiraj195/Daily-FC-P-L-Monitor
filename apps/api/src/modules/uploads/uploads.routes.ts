@@ -34,14 +34,34 @@ uploadsRouter.post(
           res.status(400).json({ error: 'fcId is required for SINGLE_FC upload mode' });
           return;
         }
-        if (req.user!.role === UserRole.FC_MANAGER && !req.user!.assignedFcIds.includes(parsed.fcId)) {
-          res.status(403).json({ error: `Forbidden: not authorized to upload for FC '${parsed.fcId}'` });
+
+        const targetFc = await prisma.fulfilmentCentre.findFirst({
+          where: {
+            OR: [
+              { id: parsed.fcId },
+              { code: parsed.fcId }
+            ]
+          }
+        });
+
+        if (!targetFc) {
+          res.status(404).json({ error: `Fulfilment Centre '${parsed.fcId}' not found` });
           return;
         }
+
+        if (req.user!.role === UserRole.FC_MANAGER && !req.user!.assignedFcIds.includes(targetFc.id)) {
+          res.status(403).json({
+            error: `Forbidden: As an FC Manager, you can only upload data for your assigned Fulfilment Centre '${targetFc.name}' (${targetFc.code})`
+          });
+          return;
+        }
+
+        // Use the resolved FC UUID
+        parsed.fcId = targetFc.id;
       } else {
         // Centralized mode requires ADMIN or FINANCE
         if (req.user!.role === UserRole.FC_MANAGER) {
-          res.status(403).json({ error: 'Forbidden: FC Managers can only upload in SINGLE_FC mode' });
+          res.status(403).json({ error: 'Forbidden: FC Managers are restricted to uploading data exclusively for their own assigned Fulfilment Centre' });
           return;
         }
       }

@@ -1,9 +1,46 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { PrismaClient, UserRole } from '@prisma/client';
-import { authenticate, requireFCAccess } from '../../middleware/auth.js';
+import { authenticate, requireRole, requireFCAccess } from '../../middleware/auth.js';
+import { createFCRequestSchema } from '@prozo/shared';
 
 const prisma = new PrismaClient();
 export const fcRouter = Router();
+
+fcRouter.post(
+  '/',
+  authenticate,
+  requireRole([UserRole.ADMIN]),
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const parsed = createFCRequestSchema.parse(req.body);
+      const code = parsed.code.toUpperCase().trim();
+
+      const existing = await prisma.fulfilmentCentre.findUnique({
+        where: { code }
+      });
+
+      if (existing) {
+        res.status(409).json({ error: `Fulfilment Centre with code '${code}' already exists` });
+        return;
+      }
+
+      const fc = await prisma.fulfilmentCentre.create({
+        data: {
+          code,
+          name: parsed.name.trim(),
+          location: parsed.location?.trim() || null,
+          currency: parsed.currency || 'INR',
+          isActive: true
+        }
+      });
+
+      res.status(201).json(fc);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 
 fcRouter.get(
   '/',

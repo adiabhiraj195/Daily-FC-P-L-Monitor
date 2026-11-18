@@ -204,3 +204,26 @@ export const createTargetRuleSchema = z.object({
   effectiveFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   effectiveTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional()
 });
+
+// --- User Management & RBAC Schemas ---
+export const newFCSchema = z.object({
+  code: z.string().min(2, 'FC code is required (e.g. FC-PUN-01)').toUpperCase(),
+  name: z.string().min(2, 'FC name is required'),
+  location: z.string().optional(),
+  currency: z.string().default('INR')
+});
+
+export const createManagerRequestSchema = z.object({
+  name: z.string().min(2, 'Name must be at least 2 characters'),
+  email: z.string().email('Valid email is required'),
+  password: z.string().min(6, 'Password must be at least 6 characters'),
+  role: z.enum(['FC_MANAGER', 'FINANCE', 'ADMIN']).default('FC_MANAGER'),
+  fcId: z.string().optional(),
+  newFC: newFCSchema.optional()
+});
+
+export const createFCRequestSchema = newFCSchema;
+
+export type CreateManagerRequest = z.infer<typeof createManagerRequestSchema>;
+export type CreateFCRequest = z.infer<typeof createFCRequestSchema>;
+

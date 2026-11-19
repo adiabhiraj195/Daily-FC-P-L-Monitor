@@ -1,6 +1,6 @@
 # AWS EC2 Production Deployment Guide
 
-This guide provides end-to-end instructions for deploying the **Prozo Fulfilment Centre (FC) Margin Monitoring System** onto an **AWS EC2 instance** using Docker, Docker Compose, PostgreSQL 16, and Nginx, with native **AWS S3** for secure object storage.
+This guide provides end-to-end instructions for deploying the **Prozo Fulfilment Centre (FC) Margin Monitoring System** onto an **AWS EC2 instance** running **Amazon Linux 2023 (AL2023)** (or Ubuntu Server 22.04/24.04 LTS), using Docker, Docker Compose, PostgreSQL 16, Nginx, and native **AWS S3**.
 
 ---
 
@@ -13,7 +13,7 @@ When deployed on AWS EC2, the modular microservices run inside an isolated Docke
         │
         ▼ (Port 80 / 443)
 ┌─────────────────────────────────────────────────────────────┐
-│ AWS EC2 Instance (Ubuntu 22.04 / 24.04 LTS)                 │
+│ AWS EC2 Instance (Amazon Linux 2023 / AL2023)               │
 │                                                             │
 │   ┌─────────────────────────────────────────────────────┐   │
 │   │ Nginx Reverse Proxy (prozo-nginx:80/443)            │   │
@@ -54,187 +54,185 @@ When deployed on AWS EC2, the modular microservices run inside an isolated Docke
 
 | Metric | Minimum Requirement | Recommended Production |
 | :--- | :--- | :--- |
-| **Instance Type** | `t3.medium` (2 vCPU, 4GB RAM) | `t3.large` or `c6i.large` (2 vCPU, 8GB RAM) |
-| **Operating System** | Ubuntu Server 22.04 LTS / 24.04 LTS (HVM, 64-bit x86) | Ubuntu Server 24.04 LTS |
-| **Storage (EBS)** | 30 GB gp3 | 50 GB gp3 (3,000 IOPS, 125 MB/s throughput) |
+| **AMI** | **`al2023-ami-2023.*-x86_64` (Amazon Linux 2023)** | Amazon Linux 2023 (or Ubuntu 24.04 LTS) |
+| **Default User** | **`ec2-user`** (Amazon Linux 2023) | `ec2-user` |
+| **Instance Type** | `t3.medium` (2 vCPU, 4GB RAM) | `t3.large` (2 vCPU, 8GB RAM) |
+| **Storage (EBS)** | 30 GB gp3 | 50 GB gp3 |
 | **Swap Space** | 4 GB (automatically provisioned by `ec2-setup.sh`) | 4 GB |
 
 ---
 
 ## 3. AWS Security Group Configuration
 
-Create an EC2 Security Group (`prozo-margin-monitor-sg`) with the following **Inbound Rules**:
+In the AWS EC2 Console, ensure your Security Group has these **Inbound Rules**:
 
 | Type | Protocol | Port Range | Source | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| **SSH** | TCP | `22` | `Your-Office-IP/32` or Admin IP | Administrative Shell Access |
-| **HTTP** | TCP | `80` | `0.0.0.0/0` | Web Dashboard & ACME Let's Encrypt |
+| **SSH** | TCP | `22` | `My IP` (or `0.0.0.0/0`) | Administrative Shell Access |
+| **HTTP** | TCP | `80` | `0.0.0.0/0` | Web Dashboard & Nginx Gateway |
 | **HTTPS** | TCP | `443` | `0.0.0.0/0` | Secure SSL Web Dashboard & API |
 
-*Note: All outbound traffic (`0.0.0.0/0`) is allowed for AWS S3 communication, LLM APIs, and email delivery.*
+---
+
+## 4. Amazon Linux 2023 (AL2023) Step-by-Step Deployment
+
+### Step 1: Connect to your Amazon Linux 2023 Instance
+> [!NOTE]
+> Amazon Linux 2023 uses **`ec2-user`** as the default username (unlike Ubuntu which uses `ubuntu`).
+
+From your **local terminal**:
+```bash
+chmod 400 /path/to/your-key.pem
+ssh -i /path/to/your-key.pem ec2-user@<YOUR_EC2_PUBLIC_IP>
+```
 
 ---
 
-## 4. Deployment Option A: Zero-Touch Automated Launch (User Data)
+### Step 2: Clone or Copy the Repository to `/opt/prozo-fc-margin-monitor`
 
-When launching your EC2 instance in the AWS Management Console:
-1. Choose **Ubuntu Server 24.04 LTS** as the AMI.
-2. Select instance type **`t3.medium`** or **`t3.large`**.
-3. Attach the security group created in Step 3.
-4. Expand **Advanced Details** at the bottom of the page.
-5. In the **User Data** field, paste the contents of `scripts/ec2-setup.sh`:
-
+On the EC2 instance:
 ```bash
-#!/usr/bin/env bash
-curl -fsSL https://raw.githubusercontent.com/<YOUR-ORG>/<YOUR-REPO>/main/scripts/ec2-setup.sh | bash
-```
+# Prepare application directory with correct ownership
+sudo mkdir -p /opt/prozo-fc-margin-monitor
+sudo chown -R ec2-user:ec2-user /opt/prozo-fc-margin-monitor
 
-The instance will initialize, install Docker, provision swap, configure Nginx, build the containers, run database migrations/seeds, and start the system automatically.
-
----
-
-## 5. Deployment Option B: Manual SSH Deployment
-
-### Step 1: Connect to your EC2 Instance
-```bash
-ssh -i /path/to/your-key.pem ubuntu@<your-ec2-public-ip>
-```
-
-### Step 2: Clone the Repository
-```bash
+# Clone your repository
 git clone https://github.com/<YOUR-ORG>/FC-data-process.git /opt/prozo-fc-margin-monitor
 cd /opt/prozo-fc-margin-monitor
 ```
 
-### Step 3: Run the Automated Setup Script
+*(Alternatively, to copy from your local machine via rsync:)*
 ```bash
+# Run this from your LOCAL Mac/Linux machine:
+rsync -avz --exclude 'node_modules' --exclude '.next' --exclude 'dist' \
+  -e "ssh -i /path/to/your-key.pem" \
+  ./ ec2-user@<YOUR_EC2_PUBLIC_IP>:/opt/prozo-fc-margin-monitor/
+```
+
+---
+
+### Step 3: Run the Automated Setup Script
+
+On the EC2 instance:
+```bash
+cd /opt/prozo-fc-margin-monitor
 sudo bash scripts/ec2-setup.sh
 ```
-This script will:
-- Update OS packages and install Docker, Docker Compose, Git, UFW, and jq.
-- Configure a 4GB swap space to ensure memory stability during Next.js builds.
-- Configure UFW firewall allowing ports 22, 80, and 443.
-- Generate a secure `.env` file with random 64-character JWT secrets.
-- Install the `prozo.service` systemd service for automatic reboot recovery.
-- Build and launch all services (`db`, `api`, `worker`, `web`, `nginx`).
 
-### Step 4: Configure AWS S3 Credentials in `.env`
-Edit `/opt/prozo-fc-margin-monitor/.env`:
+#### What `scripts/ec2-setup.sh` does automatically on Amazon Linux 2023:
+1. Detects `amzn` from `/etc/os-release` and runs `dnf` updates.
+2. Installs Docker Engine, Git, jq, and the latest official Docker Compose CLI binary.
+3. Automatically adds `ec2-user` to the `docker` group.
+4. Allocates a **4GB swap space** (`/swapfile`) to ensure memory stability during Next.js builds.
+5. Auto-generates a production `.env` with strong 64-character random JWT secrets and detects your EC2 Public IP.
+6. Installs `prozo.service` systemd unit so the containers automatically restart on EC2 reboot.
+7. Builds and boots all 5 containers (`db`, `api`, `worker`, `web`, `nginx`).
+
+---
+
+### Step 4: Configure Your AWS S3 Bucket
+
+Edit the `.env` file to add your AWS S3 bucket credentials:
+```bash
+nano /opt/prozo-fc-margin-monitor/.env
+```
+
+Set your AWS credentials:
 ```ini
 AWS_REGION=ap-south-1
-AWS_S3_BUCKET=your-production-bucket-name
+AWS_S3_BUCKET=your-actual-s3-bucket-name
 AWS_ACCESS_KEY_ID=AKIAXXXXXXXXXXXXXXXX
-AWS_SECRET_ACCESS_KEY=your_aws_secret_key_here
+AWS_SECRET_ACCESS_KEY=your_secret_access_key_here
 AWS_S3_FORCE_PATH_STYLE=false
+
+# LLM API (if using Groq for AI reports)
+LLM_PROVIDER=groq
+GROQ_API_KEY=gsk_your_groq_api_key_here
 ```
-Then restart the containers:
+Save and exit (`Ctrl + O`, then `Enter`, then `Ctrl + X`).
+
+Restart containers with the updated configuration:
 ```bash
 docker compose up -d
 ```
 
 ---
 
-## 6. One-Command Starting and Managing
+### Step 5: Verify Deployment
 
-You can manage the entire application using standard Docker Compose commands from the project root:
-
+Check container health:
 ```bash
-# Start all services in the background (One command)
-docker compose up -d
-
-# Check live status of all services
 docker compose ps
-
-# Follow logs across all services
-docker compose logs -f
-
-# Follow logs for a specific service
-docker compose logs -f api
-docker compose logs -f worker
-docker compose logs -f web
-docker compose logs -f nginx
-
-# Stop all services cleanly
-docker compose down
-
-# Stop and wipe database volume (clean reset)
-docker compose down -v
 ```
 
----
+Expected output:
+```text
+NAME           IMAGE                   COMMAND                  SERVICE   STATUS                    PORTS
+prozo-api      fc-data-process-api     "./scripts/docker-en…"   api       Up (healthy)              0.0.0.0:4000->4000/tcp
+prozo-db       postgres:16-alpine      "docker-entrypoint.s…"   db        Up (healthy)              0.0.0.0:5432->5432/tcp
+prozo-nginx    fc-data-process-nginx   "/docker-entrypoint.…"   nginx     Up (healthy)              0.0.0.0:80->80/tcp, 0.0.0.0:443->443/tcp
+prozo-web      fc-data-process-web     "docker-entrypoint.s…"   web       Up (healthy)              0.0.0.0:3000->3000/tcp
+prozo-worker   fc-data-process-worker  "./scripts/docker-en…"   worker    Up                        
+```
 
-## 7. Configuring Custom Domain & SSL (HTTPS)
-
-Once your DNS A-record points your domain (e.g. `margin.yourcompany.com`) to your EC2 Public IP:
-
-Run the automated SSL setup script:
+Test internal probes:
 ```bash
-sudo bash scripts/setup-ssl.sh margin.yourcompany.com admin@yourcompany.com
+curl http://localhost/nginx-health
+curl http://localhost/health/ready
 ```
 
-This script will:
-1. Obtain an SSL certificate from Let's Encrypt using Certbot.
-2. Configure Nginx with modern TLS 1.2/1.3 security ciphers and HTTP-to-HTTPS automatic redirection.
-3. Update `.env` with `COOKIE_SECURE=true` and your HTTPS domain URLs.
-4. Reload Nginx without downtime.
-5. Install a daily cron job that auto-renews certificates before expiration.
+Open your browser and navigate to:
+```
+http://<YOUR_EC2_PUBLIC_IP>
+```
 
 ---
 
-## 8. Verifying Deployment & Health Probes
+### Step 6: Default Seed Login Credentials
 
-Once the stack is running, verify all endpoints:
-
-| Endpoint | Purpose | Expected Status |
-| :--- | :--- | :--- |
-| `http://<EC2_IP>/nginx-health` | Nginx Proxy Health | `200 OK` ("healthy") |
-| `http://<EC2_IP>/health/live` | Express API Live Probe | `200 OK` (`{"status":"live"}`) |
-| `http://<EC2_IP>/health/ready` | API Database Readiness | `200 OK` (`{"status":"ready","database":"connected"}`) |
-| `http://<EC2_IP>/login` | Web Dashboard UI | `200 OK` (Next.js HTML) |
-
----
-
-## 9. Seeded User Credentials
-
-On initial startup, `prisma/seed.ts` automatically provisions default test accounts:
-
-| Role | Email | Default Password | Scoped Fulfilment Centres |
+| Role | Email | Password | Access Scope |
 | :--- | :--- | :--- | :--- |
 | **System Administrator** | `admin@prozo.com` | `Password@123` | All FCs + Global Target Rules |
 | **Finance Controller** | `finance@prozo.com` | `Password@123` | All National FCs |
 | **Delhi FC Manager** | `manager.delhi@prozo.com` | `Password@123` | `FC-DEL-01` (Delhi Centre) |
 | **Bangalore FC Manager** | `manager.blr@prozo.com` | `Password@123` | `FC-BLR-01` (Bangalore Centre) |
 
-> [!IMPORTANT]
-> Change the default passwords immediately after your initial production login via the **Users Management** portal.
+---
+
+### Step 7 (Optional): Custom Domain & Free SSL (HTTPS)
+
+Once your DNS A-record points to your EC2 instance (e.g., `monitor.yourcompany.com` $\to$ `<EC2_IP>`):
+
+```bash
+sudo bash scripts/setup-ssl.sh monitor.yourcompany.com ops@yourcompany.com
+```
+
+This will automatically install Certbot via `dnf`/`pip3`, issue a Let's Encrypt SSL certificate, update Nginx with TLS 1.2/1.3, configure HTTP $\to$ HTTPS redirection, and set up auto-renewal cron.
 
 ---
 
-## 10. Continuous Updates & Redeployment
-
-To pull the latest codebase updates and redeploy without downtime:
+### Daily Management Commands on Amazon Linux 2023
 
 ```bash
 cd /opt/prozo-fc-margin-monitor
+
+# View live aggregate logs
+docker compose logs -f
+
+# View logs for a specific container
+docker compose logs -f api
+docker compose logs -f worker
+docker compose logs -f web
+
+# Restart all services
+docker compose restart
+
+# Stop all services
+docker compose down
+
+# One-command code update and redeploy
 sudo bash scripts/deploy.sh
-```
 
-The `deploy.sh` script automatically:
-1. Pulls the latest commits from the Git tracking branch.
-2. Rebuilds modified Docker images with layer caching.
-3. Performs a graceful restart of changed containers (`docker compose up -d --remove-orphans`).
-4. Prunes stale Docker images to preserve EBS disk space.
-
----
-
-## 11. Database Backup & Disaster Recovery
-
-### Creating a Database Backup
-```bash
-docker compose exec db pg_dump -U postgres prozo_margin > /opt/backup-$(date +%Y%m%d-%H%M%S).sql
-```
-
-### Restoring from a Backup
-```bash
-cat /opt/backup-<timestamp>.sql | docker compose exec -T db psql -U postgres prozo_margin
+# Database backup
+docker compose exec db pg_dump -U postgres prozo_margin > ~/backup-$(date +%F).sql
 ```

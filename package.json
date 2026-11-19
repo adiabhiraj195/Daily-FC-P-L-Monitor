@@ -23,8 +23,10 @@
     "prisma:push": "prisma db push --schema=prisma/schema.prisma",
     "prisma:seed": "tsx prisma/seed.ts",
     "db:flush": "tsx scripts/flush-db.ts",
+    "docker:build": "docker compose build",
     "docker:up": "docker compose up -d",
-    "docker:down": "docker compose down"
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f"
   },
   "dependencies": {
     "@prisma/client": "^6.1.0"

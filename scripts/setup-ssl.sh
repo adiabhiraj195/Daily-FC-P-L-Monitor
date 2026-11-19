@@ -27,8 +27,16 @@ echo "=========================================================="
 # 1. Install certbot if not already present
 if ! command -v certbot &> /dev/null; then
     echo "==> Installing certbot..."
-    apt-get update -y
-    apt-get install -y certbot
+    if command -v dnf &> /dev/null; then
+        dnf install -y certbot 2>/dev/null || {
+            dnf install -y python3-pip
+            pip3 install certbot
+            ln -sf /usr/local/bin/certbot /usr/bin/certbot || true
+        }
+    else
+        apt-get update -y
+        apt-get install -y certbot
+    fi
 fi
 
 # 2. Obtain SSL certificate using webroot authentication (proxied by Nginx)

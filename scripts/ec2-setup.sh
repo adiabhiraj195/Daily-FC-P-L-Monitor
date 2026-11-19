@@ -23,26 +23,38 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
-export DEBIAN_FRONTEND=noninteractive
+# Detect Operating System
+OS_TYPE="unknown"
+if [ -f /etc/os-release ]; then
+  . /etc/os-release
+  OS_TYPE="${ID:-unknown}"
+fi
+echo "Detected Operating System: ${OS_TYPE} (${PRETTY_NAME:-Linux})"
 
 # ------------------------------------------------------------------------------
 # 1. Update System Packages & Install Baseline Utilities
 # ------------------------------------------------------------------------------
 echo "==> [1/8] Updating package repositories and installing baseline utilities..."
-apt-get update -y
-apt-get install -y --no-install-recommends \
-    apt-transport-https \
-    ca-certificates \
-    curl \
-    gnupg \
-    lsb-release \
-    git \
-    jq \
-    ufw \
-    unzip \
-    htop \
-    fail2ban \
-    software-properties-common
+if [ "${OS_TYPE}" = "amzn" ] || [ "${OS_TYPE}" = "fedora" ] || [ "${OS_TYPE}" = "rhel" ]; then
+    dnf update -y
+    dnf install -y git jq curl unzip tar htop openssl
+else
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -y
+    apt-get install -y --no-install-recommends \
+        apt-transport-https \
+        ca-certificates \
+        curl \
+        gnupg \
+        lsb-release \
+        git \
+        jq \
+        ufw \
+        unzip \
+        htop \
+        fail2ban \
+        software-properties-common
+fi
 
 # ------------------------------------------------------------------------------
 # 2. Configure 4GB Swap Space (Crucial for EC2 memory stability during Next.js builds)
@@ -50,7 +62,7 @@ apt-get install -y --no-install-recommends \
 echo "==> [2/8] Checking and configuring swap space..."
 if [ ! -f /swapfile ]; then
     echo "Creating 4GB swapfile at /swapfile..."
-    fallocate -l 4G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=4096
+    dd if=/dev/zero of=/swapfile bs=1M count=4096 status=progress || fallocate -l 4G /swapfile
     chmod 600 /swapfile
     mkswap /swapfile
     swapon /swapfile
@@ -71,20 +83,31 @@ fi
 # 3. Install Official Docker Engine & Docker Compose Plugin
 # ------------------------------------------------------------------------------
 echo "==> [3/8] Installing Docker Engine and Docker Compose Plugin..."
-install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor --yes -o /etc/apt/keyrings/docker.gpg
-chmod a+r /etc/apt/keyrings/docker.gpg
+if [ "${OS_TYPE}" = "amzn" ] || [ "${OS_TYPE}" = "fedora" ] || [ "${OS_TYPE}" = "rhel" ]; then
+    dnf install -y docker
+    # Install Docker Compose CLI Plugin binary
+    mkdir -p /usr/local/lib/docker/cli-plugins /usr/local/bin /usr/libexec/docker/cli-plugins
+    curl -sSL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-$(uname -m)" -o /usr/local/lib/docker/cli-plugins/docker-compose
+    chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+    cp /usr/local/lib/docker/cli-plugins/docker-compose /usr/libexec/docker/cli-plugins/docker-compose 2>/dev/null || true
+    ln -sf /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose
+    ln -sf /usr/local/lib/docker/cli-plugins/docker-compose /usr/bin/docker-compose
+else
+    install -m 0755 -d /etc/apt/keyrings
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor --yes -o /etc/apt/keyrings/docker.gpg
+    chmod a+r /etc/apt/keyrings/docker.gpg
 
-UBUNTU_CODENAME="$(lsb_release -cs)"
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu ${UBUNTU_CODENAME} stable" > /etc/apt/sources.list.d/docker.list
+    UBUNTU_CODENAME="$(lsb_release -cs)"
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu ${UBUNTU_CODENAME} stable" > /etc/apt/sources.list.d/docker.list
 
-apt-get update -y
-apt-get install -y --no-install-recommends \
-    docker-ce \
-    docker-ce-cli \
-    containerd.io \
-    docker-buildx-plugin \
-    docker-compose-plugin
+    apt-get update -y
+    apt-get install -y --no-install-recommends \
+        docker-ce \
+        docker-ce-cli \
+        containerd.io \
+        docker-buildx-plugin \
+        docker-compose-plugin
+fi
 
 # Configure Docker daemon with log rotation to prevent disk exhaustion
 mkdir -p /etc/docker
@@ -102,27 +125,39 @@ systemctl daemon-reload
 systemctl enable docker
 systemctl restart docker
 
-# Add sudo/current user to docker group
-TARGET_USER="${SUDO_USER:-ubuntu}"
-if id "$TARGET_USER" &>/dev/null; then
+# Add sudo/current user to docker group (check ec2-user, ubuntu, then sudo user)
+TARGET_USER=""
+if id "ec2-user" &>/dev/null; then
+    TARGET_USER="ec2-user"
+elif id "ubuntu" &>/dev/null; then
+    TARGET_USER="ubuntu"
+else
+    TARGET_USER="${SUDO_USER:-root}"
+fi
+
+if [ "${TARGET_USER}" != "root" ]; then
     usermod -aG docker "$TARGET_USER"
     echo "Added user '${TARGET_USER}' to the docker group."
 fi
 
 echo "Docker installed: $(docker --version)"
-echo "Docker Compose installed: $(docker compose version)"
+echo "Docker Compose installed: $(docker compose version || docker-compose --version)"
 
 # ------------------------------------------------------------------------------
-# 4. Configure EC2 Firewall (UFW)
+# 4. Configure EC2 Firewall (UFW if installed, else relies on AWS Security Group)
 # ------------------------------------------------------------------------------
-echo "==> [4/8] Configuring UFW firewall rules..."
-ufw default deny incoming
-ufw default allow outgoing
-ufw allow 22/tcp comment 'SSH'
-ufw allow 80/tcp comment 'HTTP Nginx'
-ufw allow 443/tcp comment 'HTTPS Nginx'
-ufw --force enable
-echo "Firewall active with open ports 22, 80, 443."
+echo "==> [4/8] Configuring firewall..."
+if command -v ufw &>/dev/null; then
+    ufw default deny incoming
+    ufw default allow outgoing
+    ufw allow 22/tcp comment 'SSH'
+    ufw allow 80/tcp comment 'HTTP Nginx'
+    ufw allow 443/tcp comment 'HTTPS Nginx'
+    ufw --force enable
+    echo "UFW Firewall active with open ports 22, 80, 443."
+else
+    echo "UFW not present on ${OS_TYPE}. Traffic filtering managed by AWS Security Group (Ports 22, 80, 443)."
+fi
 
 # ------------------------------------------------------------------------------
 # 5. Setup Project Repository Directory

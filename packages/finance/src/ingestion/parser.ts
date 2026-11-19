@@ -16,23 +16,29 @@ export interface HeaderMapping {
 }
 
 export const DEFAULT_HEADER_MAPPINGS: HeaderMapping = {
-  fcId: ['fc_id', 'fcid', 'fc id', 'fulfilment centre', 'fulfilment center', 'fc code', 'fc', 'centre', 'center', 'warehouse'],
-  businessDate: ['business_date', 'businessdate', 'business date', 'date', 'day', 'txn_date', 'transaction date', 'pnl date'],
+  fcId: ['fcid', 'fc_id', 'fc id', 'fulfilment centre', 'fulfilment center', 'fc code', 'fc', 'centre', 'center', 'warehouse'],
+  businessDate: ['businessdate', 'business_date', 'business date', 'date', 'day', 'txn_date', 'transaction date', 'pnl date'],
   revenue: ['revenue', 'total revenue', 'sales', 'turnover', 'gross revenue', 'net revenue'],
-  manpowerCost: ['manpower_cost', 'manpower cost', 'manpower', 'labor', 'labour', 'labor cost', 'labour cost'],
-  packagingCost: ['packaging_cost', 'packaging cost', 'packaging', 'packing cost', 'packing'],
-  powerFuelCost: ['power_fuel_cost', 'power & fuel', 'power and fuel', 'power & fuel cost', 'power_and_fuel', 'electricity & fuel', 'power fuel', 'power', 'fuel'],
-  fcRent: ['fc_rent', 'fc rent', 'rent', 'warehouse rent', 'facility rent'],
-  equipmentRentals: ['equipment_rentals', 'equipment rentals', 'equipment rental', 'rentals', 'equipment'],
+  manpowerCost: ['manpowercost', 'manpower_cost', 'manpower cost', 'manpower', 'labor', 'labour', 'labor cost', 'labour cost'],
+  packagingCost: ['packagingcost', 'packaging_cost', 'packaging cost', 'packaging', 'packing cost', 'packing'],
+  powerFuelCost: ['powerfuelcost', 'power_fuel_cost', 'power fuel cost', 'power & fuel', 'power and fuel', 'power & fuel cost', 'power_and_fuel', 'electricity & fuel', 'power fuel', 'power', 'fuel'],
+  fcRent: ['fcrent', 'fc_rent', 'fc rent', 'rent', 'warehouse rent', 'facility rent'],
+  equipmentRentals: ['equipmentrentals', 'equipment_rentals', 'equipment rentals', 'equipment rental', 'rentals', 'equipment'],
   overheads: ['overheads', 'overhead', 'other overheads', 'admin overheads', 'indirect costs', 'other costs'],
   currency: ['currency', 'curr']
 };
 
 /**
- * Normalizes header string to lowercase trimmed alphanumerics
+ * Normalizes header string to lowercase trimmed alphanumerics with camelCase separation
  */
 function cleanHeader(header: string): string {
-  return header.toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
+  return header
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 /**
@@ -43,16 +49,45 @@ export function mapHeaders(
   customMapping: HeaderMapping = DEFAULT_HEADER_MAPPINGS
 ): Record<keyof HeaderMapping, number> {
   const result: Partial<Record<keyof HeaderMapping, number>> = {};
-  const cleanedRaw = rawHeaders.map((h, idx) => ({ clean: cleanHeader(h), idx }));
+  const cleanedRaw = rawHeaders.map((h, idx) => {
+    const clean = cleanHeader(String(h ?? ''));
+    return {
+      clean,
+      compact: clean.replace(/\s+/g, ''),
+      idx
+    };
+  });
 
   for (const [canonicalKey, aliases] of Object.entries(customMapping) as [keyof HeaderMapping, string[]][]) {
-    for (const alias of aliases) {
-      const cleanedAlias = cleanHeader(alias);
-      const match = cleanedRaw.find(r => r.clean === cleanedAlias);
+    const candidates = [String(canonicalKey), ...(aliases || [])];
+    let foundIdx: number | undefined;
+
+    // 1. Exact match on normalized clean string
+    for (const candidate of candidates) {
+      const cleanedCandidate = cleanHeader(candidate);
+      const match = cleanedRaw.find(r => r.clean === cleanedCandidate);
       if (match) {
-        result[canonicalKey] = match.idx;
+        foundIdx = match.idx;
         break;
       }
+    }
+
+    // 2. Compact match (whitespace-stripped) fallback
+    if (foundIdx === undefined) {
+      for (const candidate of candidates) {
+        const cleanedCandidate = cleanHeader(candidate);
+        const compactCandidate = cleanedCandidate.replace(/\s+/g, '');
+        if (!compactCandidate) continue;
+        const match = cleanedRaw.find(r => r.compact === compactCandidate);
+        if (match) {
+          foundIdx = match.idx;
+          break;
+        }
+      }
+    }
+
+    if (foundIdx !== undefined) {
+      result[canonicalKey] = foundIdx;
     }
   }
 

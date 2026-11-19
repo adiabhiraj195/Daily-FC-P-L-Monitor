@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { PrismaClient, JobStatus } from '@prisma/client';
 import { claimNextJob } from '../../apps/worker/src/db-jobs/claim-job.js';
 import { renewJobHeartbeat } from '../../apps/worker/src/db-jobs/heartbeat.js';
@@ -8,7 +8,12 @@ describe('PostgreSQL Worker Concurrency & Lease Fencing Tests (Section 14.3)', (
   const prisma = new PrismaClient();
 
   beforeAll(async () => {
-    // Clear old test jobs
+    // Clear old test jobs to ensure clean queue state
+    await prisma.backgroundJob.deleteMany({});
+  });
+
+  afterAll(async () => {
+    // Clean up all concurrency test jobs so live worker does not pick them up
     await prisma.backgroundJob.deleteMany({
       where: { idempotencyKey: { startsWith: 'test-concurrency:' } }
     });

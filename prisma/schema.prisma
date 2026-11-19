@@ -64,6 +64,28 @@ enum UploadMode {
   SINGLE_FC
 }
 
+enum DatasetType {
+  PNL
+  DAILY_OPERATIONS
+  DAILY_LABOR
+  COMBINED_OPERATIONS_LABOR
+}
+
+enum DiagnosticStatus {
+  COMPLETE
+  PARTIAL
+  INSUFFICIENT_DATA
+}
+
+enum EvidenceCompleteness {
+  COMPLETE
+  FINANCIAL_ONLY
+  PENDING_OPERATIONS
+  PENDING_LABOR
+  PARTIAL
+  INSUFFICIENT_DATA
+}
+
 enum UploadBatchStatus {
   INITIATED
   UPLOADED
@@ -123,6 +145,8 @@ model User {
   reviews      AnomalyReview[]
   auditLogs    AuditLog[]
   notifications Notification[]
+  operationsUploaded OperationalDailyMetrics[]
+  workforceUploaded  WorkforceDailyMetrics[]
 }
 
 model FulfilmentCentre {
@@ -137,6 +161,8 @@ model FulfilmentCentre {
   managers    UserFulfilmentCentre[]
   targetRules TargetRule[]
   submissions DailySubmission[]
+  operationsMetrics OperationalDailyMetrics[]
+  workforceMetrics  WorkforceDailyMetrics[]
 }
 
 model UserFulfilmentCentre {
@@ -171,6 +197,11 @@ model UploadBatch {
   id               String            @id @default(uuid())
   uploadedById     String
   mode             UploadMode        @default(CENTRALIZED)
+  datasetType      DatasetType       @default(PNL)
+  fcId             String?
+  startDate        DateTime?         @db.Date
+  endDate          DateTime?         @db.Date
+  version          Int               @default(1)
   originalFileName String
   bucket           String
   objectKey        String            @unique
@@ -186,6 +217,8 @@ model UploadBatch {
   completedAt      DateTime?
   uploadedBy       User              @relation(fields: [uploadedById], references: [id], onDelete: Restrict)
   submissions      DailySubmission[]
+  operationsMetrics OperationalDailyMetrics[]
+  workforceMetrics  WorkforceDailyMetrics[]
 
   @@index([status, createdAt])
 }
@@ -237,7 +270,9 @@ model DailyPnL {
   submission         DailySubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
   costLines          CostLineItem[]
   anomalies          Anomaly[]
-  aiReport           AIReport?
+  latestAiReportId   String?         @unique
+  aiReport           AIReport?       @relation("LatestPnLReport", fields: [latestAiReportId], references: [id])
+  aiReports          AIReport[]      @relation("AllPnLReports")
 
   @@index([colour])
 }
@@ -281,18 +316,94 @@ model Anomaly {
 }
 
 model AIReport {
-  id               String         @id @default(uuid())
-  dailyPnlId       String         @unique
-  status           AIReportStatus @default(PENDING)
-  investigation    Json
-  recommendations  Json
-  model            String
-  promptVersion    String
-  graphThreadId    String
-  inputFingerprint String?
-  generatedAt      DateTime       @default(now())
-  errorDetails     Json?
-  dailyPnl         DailyPnL       @relation(fields: [dailyPnlId], references: [id], onDelete: Cascade)
+  id                     String               @id @default(uuid())
+  dailyPnlId             String
+  version                Int                  @default(1)
+  isLatest               Boolean              @default(true)
+  status                 AIReportStatus       @default(PENDING)
+  diagnosticStatus       DiagnosticStatus     @default(PARTIAL)
+  evidenceCompleteness   EvidenceCompleteness @default(FINANCIAL_ONLY)
+  investigation          Json
+  recommendations        Json
+  model                  String
+  promptVersion          String
+  graphThreadId          String
+  inputFingerprint       String?
+  operationalDataVersion Int?
+  workforceDataVersion   Int?
+  financialDataVersion   Int                  @default(1)
+  targetRulesVersion     Int                  @default(1)
+  previousReportId       String?
+  generatedAt            DateTime             @default(now())
+  errorDetails           Json?
+  dailyPnl               DailyPnL             @relation("AllPnLReports", fields: [dailyPnlId], references: [id], onDelete: Cascade)
+  latestForDailyPnl      DailyPnL?            @relation("LatestPnLReport")
+  previousReport         AIReport?            @relation("ReportHistory", fields: [previousReportId], references: [id], onDelete: SetNull)
+  nextReports            AIReport[]           @relation("ReportHistory")
+
+  @@unique([dailyPnlId, version])
+  @@index([dailyPnlId, isLatest])
+  @@index([inputFingerprint])
+}
+
+model OperationalDailyMetrics {
+  id                  String            @id @default(uuid())
+  fcId                String
+  businessDate        DateTime          @db.Date
+  inboundShipments    Int
+  outboundOrders      Int
+  unitsProcessed      Int
+  orderLinesProcessed Int
+  returnsProcessed    Int
+  operatingHours      Decimal           @db.Decimal(5, 2)
+  storageOccupancyPct Decimal?          @db.Decimal(5, 2)
+  sourceUploadId      String?
+  sourceRowIndex      Int?
+  version             Int               @default(1)
+  isLatest            Boolean           @default(true)
+  uploadedById        String
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  fc                  FulfilmentCentre  @relation(fields: [fcId], references: [id], onDelete: Restrict)
+  sourceUpload        UploadBatch?      @relation(fields: [sourceUploadId], references: [id], onDelete: SetNull)
+  uploadedBy          User              @relation(fields: [uploadedById], references: [id], onDelete: Restrict)
+
+  @@unique([fcId, businessDate, version])
+  @@index([fcId, businessDate, isLatest])
+  @@index([fcId])
+  @@index([businessDate])
+  @@index([sourceUploadId])
+}
+
+model WorkforceDailyMetrics {
+  id                  String            @id @default(uuid())
+  fcId                String
+  businessDate        DateTime          @db.Date
+  plannedHeadcount    Int
+  actualHeadcount     Int
+  plannedLabourHours  Decimal           @db.Decimal(8, 2)
+  actualPaidHours     Decimal           @db.Decimal(8, 2)
+  productiveHours     Decimal           @db.Decimal(8, 2)
+  overtimeHours       Decimal           @db.Decimal(8, 2)
+  contractorHeadcount Int
+  contractorHours     Decimal           @db.Decimal(8, 2)
+  contractorCost      Decimal           @db.Decimal(18, 2)
+  sourceUploadId      String?
+  sourceRowIndex      Int?
+  version             Int               @default(1)
+  isLatest            Boolean           @default(true)
+  uploadedById        String
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  fc                  FulfilmentCentre  @relation(fields: [fcId], references: [id], onDelete: Restrict)
+  sourceUpload        UploadBatch?      @relation(fields: [sourceUploadId], references: [id], onDelete: SetNull)
+  uploadedBy          User              @relation(fields: [uploadedById], references: [id], onDelete: Restrict)
+
+  @@unique([fcId, businessDate, version])
+  @@index([fcId, businessDate, isLatest])
+  @@index([fcId])
+  @@index([businessDate])
+  @@index([sourceUploadId])
 }
 
 model BackgroundJob {

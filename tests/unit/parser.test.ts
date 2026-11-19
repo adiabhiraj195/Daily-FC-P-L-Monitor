@@ -17,6 +17,20 @@ FC-BLR-02,2026-11-17,150000,30000,15000,7000,18000,4500,7500
     expect(result.records[1]?.fcId).toBe('FC-BLR-02');
   });
 
+  it('parses valid CSV with camelCase headers (e.g. manpowerCost, powerFuelCost)', async () => {
+    const csvContent = `fcId,businessDate,revenue,manpowerCost,packagingCost,powerFuelCost,fcRent,equipmentRentals,overheads
+FC-DEL-01,2026-11-17,100000,20000,10000,5000,12000,3000,5000
+`;
+    const buffer = Buffer.from(csvContent, 'utf-8');
+    const result = await parseSpreadsheetBuffer(buffer, true);
+
+    expect(result.errors.length).toBe(0);
+    expect(result.validRows).toBe(1);
+    expect(result.records[0]?.fcId).toBe('FC-DEL-01');
+    expect(result.records[0]?.manpowerCost).toBe('20000');
+    expect(result.records[0]?.powerFuelCost).toBe('5000');
+  });
+
   it('rejects duplicate (fcId, businessDate) in the same file', async () => {
     const csvContent = `FC_ID,Business Date,Revenue,Manpower Cost,Packaging Cost,Power & Fuel,FC Rent,Equipment Rentals,Overheads
 FC-DEL-01,2026-11-17,100000,20000,10000,5000,12000,3000,5000

@@ -6,7 +6,16 @@ export async function handleSendFCDigest(
   prisma: PrismaClient,
   emailProvider: EmailProvider
 ) {
-  const { emailOutboxId } = payload;
+  if ((payload as any)?.test) {
+    console.log(`[SEND_FC_DIGEST] Test probe job received. Skipping execution.`);
+    return { status: 'SKIPPED_TEST' };
+  }
+
+  const { emailOutboxId } = payload || {};
+  if (!emailOutboxId) {
+    console.error(`[SEND_FC_DIGEST] Missing emailOutboxId in job payload:`, payload);
+    throw new Error(`[SEND_FC_DIGEST] Invalid payload: 'emailOutboxId' is required and cannot be undefined`);
+  }
   const outbox = await prisma.emailOutbox.findUnique({
     where: { id: emailOutboxId }
   });

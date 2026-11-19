@@ -30,6 +30,7 @@ import {
   ReviewStatusBadge,
   AnomalyTypeBadge
 } from '../../../components/common/Badge';
+import { normalizeInvestigationOutput } from '@prozo/shared';
 
 export default function AnomaliesListPage() {
   // Filter state
@@ -910,7 +911,8 @@ export default function AnomaliesListPage() {
               const fc = anom.dailyPnl?.submission?.fc;
               const date = anom.dailyPnl?.submission?.businessDate?.split('T')[0];
               const aiReport = anom.dailyPnl?.aiReport;
-              const investigationSummary = aiReport?.investigation?.summary;
+              const normalizedInv = normalizeInvestigationOutput(aiReport?.investigation);
+              const investigationSummary = normalizedInv?.summary;
 
               return (
                 <div

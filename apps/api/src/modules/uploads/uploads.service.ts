@@ -1,4 +1,5 @@
-import { PrismaClient, UploadMode, UploadBatchStatus, JobStatus } from '@prisma/client';
+import { PrismaClient, UploadMode, UploadBatchStatus, JobStatus, DatasetType, UserRole } from '@prisma/client';
+import { evaluateDataCompleteness } from '@prozo/finance';
 import { S3StorageService } from '../../services/s3.service.js';
 import crypto from 'crypto';
 
@@ -15,9 +16,11 @@ export class UploadsService {
     contentType: string;
     fileSize: number;
     mode: UploadMode;
+    datasetType?: DatasetType;
     fcId?: string;
   }) {
-    console.log(`[UploadService:Initiate] Initiating upload for file="${input.fileName}" (size=${input.fileSize} bytes, mode=${input.mode}, userId=${input.userId}, fcId=${input.fcId || 'N/A'})`);
+    const datasetType = input.datasetType || DatasetType.PNL;
+    console.log(`[UploadService:Initiate] Initiating upload for file="${input.fileName}" (size=${input.fileSize} bytes, mode=${input.mode}, datasetType=${datasetType}, userId=${input.userId}, fcId=${input.fcId || 'N/A'})`);
 
     // Validate format
     const lowerName = input.fileName.toLowerCase();
@@ -46,6 +49,8 @@ export class UploadsService {
         id: batchId,
         uploadedById: input.userId,
         mode: input.mode,
+        datasetType,
+        fcId: input.fcId || null,
         originalFileName: input.fileName,
         bucket: this.s3Service.getBucketName(),
         objectKey,
@@ -55,7 +60,7 @@ export class UploadsService {
       }
     });
 
-    console.log(`[UploadService:Initiate] Created UploadBatch record: batchId=${batch.id}, objectKey=${objectKey}`);
+    console.log(`[UploadService:Initiate] Created UploadBatch record: batchId=${batch.id}, objectKey=${objectKey}, datasetType=${datasetType}`);
 
     const { uploadUrl, expiresInSeconds } = await this.s3Service.createPresignedUploadUrl(
       objectKey,
@@ -163,6 +168,28 @@ export class UploadsService {
             isLatest: true,
             version: true
           }
+        },
+        operationsMetrics: {
+          select: {
+            id: true,
+            fcId: true,
+            businessDate: true,
+            outboundOrders: true,
+            unitsProcessed: true,
+            isLatest: true,
+            version: true
+          }
+        },
+        workforceMetrics: {
+          select: {
+            id: true,
+            fcId: true,
+            businessDate: true,
+            actualPaidHours: true,
+            contractorCost: true,
+            isLatest: true,
+            version: true
+          }
         }
       }
     });
@@ -172,5 +199,108 @@ export class UploadsService {
     }
 
     return batch;
+  }
+
+  async listBatches(userId: string, role: UserRole, assignedFcIds: string[]) {
+    const whereClause: any = {};
+    if (role === UserRole.FC_MANAGER) {
+      whereClause.OR = [
+        { uploadedById: userId },
+        { fcId: { in: assignedFcIds } }
+      ];
+    }
+
+    return this.prisma.uploadBatch.findMany({
+      where: whereClause,
+      include: {
+        uploadedBy: {
+          select: { id: true, name: true, email: true, role: true }
+        }
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 100
+    });
+  }
+
+  async getDataCompleteness(dateStr: string, allowedFcIds?: string[]) {
+    const businessDate = new Date(dateStr);
+    const fcFilter: any = { isActive: true };
+    if (allowedFcIds && allowedFcIds.length > 0) {
+      fcFilter.id = { in: allowedFcIds };
+    }
+
+    const fcs = await this.prisma.fulfilmentCentre.findMany({
+      where: fcFilter,
+      orderBy: { code: 'asc' }
+    });
+
+    const fcIds = fcs.map(f => f.id);
+
+    const [submissions, operations, labor] = await Promise.all([
+      this.prisma.dailySubmission.findMany({
+        where: {
+          fcId: { in: fcIds },
+          businessDate,
+          isLatest: true
+        },
+        include: { pnl: { include: { anomalies: true } } }
+      }),
+      this.prisma.operationalDailyMetrics.findMany({
+        where: {
+          fcId: { in: fcIds },
+          businessDate,
+          isLatest: true
+        }
+      }),
+      this.prisma.workforceDailyMetrics.findMany({
+        where: {
+          fcId: { in: fcIds },
+          businessDate,
+          isLatest: true
+        }
+      })
+    ]);
+
+    const subMap = new Map(submissions.map(s => [s.fcId, s]));
+    const opsMap = new Map(operations.map(o => [o.fcId, o]));
+    const laborMap = new Map(labor.map(l => [l.fcId, l]));
+
+    return fcs.map(fc => {
+      const sub = subMap.get(fc.id);
+      const ops = opsMap.get(fc.id);
+      const lab = laborMap.get(fc.id);
+
+      const hasPnl = !!(sub && sub.status === 'COMPLETED' && sub.pnl);
+      const hasOperations = !!ops;
+      const hasLabor = !!lab;
+
+      const evaluation = evaluateDataCompleteness({
+        fcId: fc.id,
+        businessDate: dateStr,
+        hasPnl,
+        hasOperations,
+        hasLabor,
+        pnlVersion: sub?.version,
+        operationsVersion: ops?.version,
+        laborVersion: lab?.version
+      });
+
+      return {
+        fcId: fc.id,
+        fcCode: fc.code,
+        fcName: fc.name,
+        businessDate: dateStr,
+        hasPnl,
+        hasOperations,
+        hasLabor,
+        submissionId: sub?.id ?? null,
+        anomalyId: sub?.pnl?.anomalies?.[0]?.id ?? null,
+        pnlVersion: sub?.version ?? null,
+        operationsVersion: ops?.version ?? null,
+        laborVersion: lab?.version ?? null,
+        completeness: evaluation.completeness,
+        diagnosticStatus: evaluation.diagnosticStatus
+      };
+    });
   }
 }

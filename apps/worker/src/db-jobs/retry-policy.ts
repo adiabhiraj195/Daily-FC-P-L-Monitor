@@ -41,7 +41,10 @@ export function isPermanentError(error: any): boolean {
     'missing mandatory header',
     'validation error',
     'unknown fc id',
-    'not found'
+    'not found',
+    'invalid payload',
+    'is required',
+    'cannot be undefined'
   ];
 
   return permanentKeywords.some(kw => message.includes(kw));
